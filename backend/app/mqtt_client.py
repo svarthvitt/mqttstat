@@ -156,6 +156,7 @@ class MQTTIngestClient:
                     numeric_value=numeric_value,
                     raw_payload=raw_payload,
                     observed_at=observed_at,
+                    payload_json=payload,
                 )
             )
 

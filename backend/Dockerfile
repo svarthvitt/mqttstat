@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY config ./config
+COPY migrations ./migrations
 
 EXPOSE 8000
 

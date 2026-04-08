@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 
 from .config import get_settings
+from .migrations import MigrationRunner
 from .mqtt_client import MQTTIngestClient, TopicMap
 from .storage import MetricRepository
 
@@ -12,8 +14,10 @@ from .storage import MetricRepository
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings = get_settings()
+    migrations_dir = (Path(__file__).resolve().parent.parent / "migrations").resolve()
+    MigrationRunner(settings.database_url, migrations_dir).run()
+
     repository = MetricRepository(settings.database_url)
-    repository.ensure_schema()
 
     topic_map = TopicMap.from_file(settings.mqtt_topic_map_path)
     mqtt_client = MQTTIngestClient(
