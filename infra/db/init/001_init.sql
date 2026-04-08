@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS service_healthcheck (
+  id SERIAL PRIMARY KEY,
+  service_name VARCHAR(64) NOT NULL,
+  status VARCHAR(16) NOT NULL,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
