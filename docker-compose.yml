@@ -1,4 +1,15 @@
 services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: mqttstat-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./infra/mqtt/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./infra/mqtt/data:/mosquitto/data
+      - ./infra/mqtt/log:/mosquitto/log
+
   db:
     image: postgres:16-alpine
     container_name: mqttstat-db
@@ -25,6 +36,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-mqttstat}:${POSTGRES_PASSWORD:-mqttstat}@db:5432/${POSTGRES_DB:-mqttstat}
     depends_on:
       - db
+      - mosquitto
     ports:
       - "${BACKEND_PORT:-8000}:8000"
 

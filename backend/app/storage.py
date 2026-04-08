@@ -59,3 +59,27 @@ class MetricRepository:
                     ),
                 )
             conn.commit()
+
+    def get_recent_metrics(self, limit: int = 50) -> list[MetricRecord]:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT topic, metric_key, numeric_value, raw_payload, observed_at
+                    FROM mqtt_metric_records
+                    ORDER BY observed_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+                return [
+                    MetricRecord(
+                        topic=row[0],
+                        metric_key=row[1],
+                        numeric_value=row[2],
+                        raw_payload=row[3],
+                        observed_at=row[4],
+                    )
+                    for row in rows
+                ]

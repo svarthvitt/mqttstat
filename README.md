@@ -46,7 +46,9 @@ A clean, service-oriented starter layout for mqttstat with dedicated backend, fr
 
 - Frontend (React dev server): `http://localhost:5173`
 - Backend API: `http://localhost:8000`
+- Backend metrics: `http://localhost:8000/api/metrics`
 - Backend health check: `http://localhost:8000/health`
+- Mosquitto MQTT: `localhost:1883`
 - PostgreSQL: `localhost:5432`
 
 ## Notes
