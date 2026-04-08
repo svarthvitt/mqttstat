@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 
 import psycopg
 
@@ -13,49 +14,52 @@ class MetricRecord:
     numeric_value: float
     raw_payload: str
     observed_at: datetime
+    payload_json: dict | None = None
 
 
 class MetricRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
 
-    def ensure_schema(self) -> None:
-        with psycopg.connect(self._database_url) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS mqtt_metric_records (
-                        id BIGSERIAL PRIMARY KEY,
-                        topic TEXT NOT NULL,
-                        metric_key TEXT NOT NULL,
-                        numeric_value DOUBLE PRECISION NOT NULL,
-                        raw_payload TEXT NOT NULL,
-                        observed_at TIMESTAMPTZ NOT NULL
-                    );
-                    """
-                )
-            conn.commit()
-
     def insert(self, record: MetricRecord) -> None:
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO mqtt_metric_records (
-                        topic,
-                        metric_key,
-                        numeric_value,
-                        raw_payload,
-                        observed_at
+                    INSERT INTO topics (name)
+                    VALUES (%s)
+                    ON CONFLICT (name) DO NOTHING
+                    """,
+                    (record.topic,),
+                )
+
+                cur.execute(
+                    "SELECT id FROM topics WHERE name = %s",
+                    (record.topic,),
+                )
+                topic_row = cur.fetchone()
+                if topic_row is None:
+                    raise RuntimeError(f"Failed to resolve topic_id for topic={record.topic}")
+
+                cur.execute(
+                    """
+                    INSERT INTO measurements (
+                        topic_id,
+                        metric,
+                        value,
+                        ts,
+                        payload_json,
+                        raw_payload
                     )
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s)
                     """,
                     (
-                        record.topic,
+                        topic_row[0],
                         record.metric_key,
                         record.numeric_value,
-                        record.raw_payload,
                         record.observed_at.astimezone(timezone.utc),
+                        json.dumps(record.payload_json) if record.payload_json is not None else None,
+                        record.raw_payload,
                     ),
                 )
             conn.commit()
