@@ -1,0 +1,14 @@
+topics:
+  - topic: sensors/lab/environment
+    payload_type: json
+    qos: 0
+    fields:
+      - metric_key: temperature_c
+        field: temperature.c
+      - metric_key: humidity_pct
+        field: humidity
+
+  - topic: sensors/lab/power_watts
+    payload_type: raw_numeric
+    qos: 0
+    metric_key: power_watts

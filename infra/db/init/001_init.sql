@@ -4,3 +4,12 @@ CREATE TABLE IF NOT EXISTS service_healthcheck (
   status VARCHAR(16) NOT NULL,
   checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS mqtt_metric_records (
+  id BIGSERIAL PRIMARY KEY,
+  topic TEXT NOT NULL,
+  metric_key TEXT NOT NULL,
+  numeric_value DOUBLE PRECISION NOT NULL,
+  raw_payload TEXT NOT NULL,
+  observed_at TIMESTAMPTZ NOT NULL
+);
