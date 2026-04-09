@@ -53,6 +53,28 @@ class MqttRuntimeConfig:
     updated_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class AlertRule:
+    id: int | None
+    topic: str
+    metric: str
+    condition: str
+    threshold: float
+    enabled: bool = True
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class AlertHistoryRecord:
+    id: int | None
+    rule_id: int
+    observed_value: float
+    ts: datetime
+    topic: str | None = None
+    metric: str | None = None
+
+
 class MetricRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -290,6 +312,137 @@ class MetricRepository:
             mqtt_client_id=row[4],
             updated_at=row[5],
         )
+
+    def list_alert_rules(self) -> list[AlertRule]:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, topic, metric, condition, threshold, enabled, created_at, updated_at
+                    FROM alert_rules
+                    ORDER BY created_at DESC
+                    """
+                )
+                rows = cur.fetchall()
+        return [
+            AlertRule(
+                id=row[0],
+                topic=row[1],
+                metric=row[2],
+                condition=row[3],
+                threshold=row[4],
+                enabled=row[5],
+                created_at=row[6],
+                updated_at=row[7],
+            )
+            for row in rows
+        ]
+
+    def upsert_alert_rule(self, rule: AlertRule) -> AlertRule:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                if rule.id:
+                    cur.execute(
+                        """
+                        UPDATE alert_rules
+                        SET topic = %s, metric = %s, condition = %s, threshold = %s, enabled = %s, updated_at = NOW()
+                        WHERE id = %s
+                        RETURNING id, topic, metric, condition, threshold, enabled, created_at, updated_at
+                        """,
+                        (rule.topic, rule.metric, rule.condition, rule.threshold, rule.enabled, rule.id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO alert_rules (topic, metric, condition, threshold, enabled)
+                        VALUES (%s, %s, %s, %s, %s)
+                        RETURNING id, topic, metric, condition, threshold, enabled, created_at, updated_at
+                        """,
+                        (rule.topic, rule.metric, rule.condition, rule.threshold, rule.enabled),
+                    )
+                row = cur.fetchone()
+            conn.commit()
+        if row is None:
+            raise RuntimeError("Failed to upsert alert rule")
+        return AlertRule(
+            id=row[0],
+            topic=row[1],
+            metric=row[2],
+            condition=row[3],
+            threshold=row[4],
+            enabled=row[5],
+            created_at=row[6],
+            updated_at=row[7],
+        )
+
+    def delete_alert_rule(self, rule_id: int) -> None:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM alert_rules WHERE id = %s", (rule_id,))
+            conn.commit()
+
+    def get_active_alert_rules(self) -> list[AlertRule]:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, topic, metric, condition, threshold, enabled, created_at, updated_at
+                    FROM alert_rules
+                    WHERE enabled = TRUE
+                    """
+                )
+                rows = cur.fetchall()
+        return [
+            AlertRule(
+                id=row[0],
+                topic=row[1],
+                metric=row[2],
+                condition=row[3],
+                threshold=row[4],
+                enabled=row[5],
+                created_at=row[6],
+                updated_at=row[7],
+            )
+            for row in rows
+        ]
+
+    def insert_alert_history(self, rule_id: int, observed_value: float) -> None:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO alert_history (rule_id, observed_value)
+                    VALUES (%s, %s)
+                    """,
+                    (rule_id, observed_value),
+                )
+            conn.commit()
+
+    def get_alert_history(self, limit: int = 50) -> list[AlertHistoryRecord]:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT h.id, h.rule_id, h.observed_value, h.ts, r.topic, r.metric
+                    FROM alert_history h
+                    JOIN alert_rules r ON h.rule_id = r.id
+                    ORDER BY h.ts DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+        return [
+            AlertHistoryRecord(
+                id=row[0],
+                rule_id=row[1],
+                observed_value=row[2],
+                ts=row[3],
+                topic=row[4],
+                metric=row[5],
+            )
+            for row in rows
+        ]
 
     def upsert_mqtt_runtime_config(self, config: MqttRuntimeConfig) -> MqttRuntimeConfig:
         with psycopg.connect(self._database_url) as conn:

@@ -53,6 +53,7 @@ function TopNav({ title, secondaryLinkHref, secondaryLinkLabel }) {
       <h1>{title}</h1>
       <div className="topbar-links">
         <a href="#/" className="nav-link">Dashboard</a>
+        <a href="#/alerts" className="nav-link">Alerts</a>
         <a href="#/config" className="nav-link">MQTT config</a>
         {secondaryLinkHref ? <a href={secondaryLinkHref} className="nav-link">{secondaryLinkLabel}</a> : null}
       </div>
@@ -397,6 +398,104 @@ function TopicDetailPage({ topic, metric }) {
   )
 }
 
+function AlertsPage() {
+  const [rules, setRules] = useState({ data: [], loading: true, error: null })
+  const [history, setHistory] = useState({ data: [], loading: true, error: null })
+  const [form, setForm] = useState({ topic: '', metric: '', condition: 'gt', threshold: 0 })
+
+  const fetchRules = () => {
+    fetchJson('/api/alerts/rules')
+      .then((data) => setRules({ data, loading: false, error: null }))
+      .catch((error) => setRules({ data: [], loading: false, error: error.message }))
+  }
+
+  const fetchHistory = () => {
+    fetchJson('/api/alerts/history')
+      .then((data) => setHistory({ data, loading: false, error: null }))
+      .catch((error) => setHistory({ data: [], loading: false, error: error.message }))
+  }
+
+  useEffect(() => {
+    fetchRules()
+    fetchHistory()
+  }, [])
+
+  const onSaveRule = (e) => {
+    e.preventDefault()
+    fetchJson('/api/alerts/rules', {}, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form),
+    }).then(() => {
+      setForm({ topic: '', metric: '', condition: 'gt', threshold: 0 })
+      fetchRules()
+    })
+  }
+
+  const onDeleteRule = (id) => {
+    fetchJson(`/api/alerts/rules/${id}`, {}, { method: 'DELETE' }).then(fetchRules)
+  }
+
+  return (
+    <div className="page">
+      <TopNav title="Alerts" />
+      <section className="panel">
+        <h2>Create Alert Rule</h2>
+        <form className="config-form" onSubmit={onSaveRule}>
+          <label>Topic <input type="text" value={form.topic} onChange={(e) => setForm({ ...form, topic: e.target.value })} required /></label>
+          <label>Metric <input type="text" value={form.metric} onChange={(e) => setForm({ ...form, metric: e.target.value })} required /></label>
+          <label>Condition
+            <select value={form.condition} onChange={(e) => setForm({ ...form, condition: e.target.value })}>
+              <option value="gt">&gt;</option>
+              <option value="lt">&lt;</option>
+              <option value="eq">=</option>
+              <option value="gte">&ge;</option>
+              <option value="lte">&le;</option>
+            </select>
+          </label>
+          <label>Threshold <input type="number" step="any" value={form.threshold} onChange={(e) => setForm({ ...form, threshold: Number(e.target.value) })} required /></label>
+          <button type="submit" className="save-btn">Save Rule</button>
+        </form>
+      </section>
+
+      <section className="panel">
+        <h2>Active Rules</h2>
+        {rules.loading ? <LoadingState label="rules" /> : null}
+        <table className="data-table">
+          <thead>
+            <tr><th>Topic</th><th>Metric</th><th>Condition</th><th>Threshold</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            {rules.data.map((rule) => (
+              <tr key={rule.id}>
+                <td>{rule.topic}</td><td>{rule.metric}</td><td>{rule.condition}</td><td>{rule.threshold}</td>
+                <td><button onClick={() => onDeleteRule(rule.id)}>Delete</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel">
+        <h2>Alert History</h2>
+        {history.loading ? <LoadingState label="history" /> : null}
+        <table className="data-table">
+          <thead>
+            <tr><th>Time</th><th>Topic</th><th>Metric</th><th>Observed</th></tr>
+          </thead>
+          <tbody>
+            {history.data.map((h) => (
+              <tr key={h.id}>
+                <td>{new Date(h.ts).toLocaleString()}</td><td>{h.topic}</td><td>{h.metric}</td><td>{h.observed_value}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  )
+}
+
 function ConfigPage() {
   const [form, setForm] = useState({
     mqtt_host: '',
@@ -507,6 +606,9 @@ function parseRoute() {
   if (path === '/config') {
     return { page: 'config' }
   }
+  if (path === '/alerts') {
+    return { page: 'alerts' }
+  }
 
   return { page: 'dashboard' }
 }
@@ -525,6 +627,9 @@ function AppRouter() {
   }
   if (route.page === 'config') {
     return <ConfigPage />
+  }
+  if (route.page === 'alerts') {
+    return <AlertsPage />
   }
 
   return <Dashboard />
