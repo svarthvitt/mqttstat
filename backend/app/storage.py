@@ -17,6 +17,32 @@ class MetricRecord:
     payload_json: dict | None = None
 
 
+@dataclass(frozen=True)
+class TopicSummary:
+    name: str
+    metric_count: int
+    latest_observed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class HistoryRecord:
+    observed_at: datetime
+    metric: str
+    value: float
+
+
+@dataclass(frozen=True)
+class TopicStats:
+    latest: float | None
+    minimum: float | None
+    maximum: float | None
+    average: float | None
+    count: int
+    first_value: float | None
+    first_observed_at: datetime | None
+    latest_observed_at: datetime | None
+
+
 class MetricRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -63,3 +89,170 @@ class MetricRepository:
                     ),
                 )
             conn.commit()
+
+    def list_topics(self) -> list[TopicSummary]:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        t.name,
+                        COUNT(m.id) AS metric_count,
+                        MAX(m.ts) AS latest_observed_at
+                    FROM topics t
+                    LEFT JOIN measurements m ON m.topic_id = t.id
+                    GROUP BY t.name
+                    ORDER BY t.name ASC
+                    """
+                )
+                rows = cur.fetchall()
+
+        return [
+            TopicSummary(
+                name=row[0],
+                metric_count=row[1],
+                latest_observed_at=row[2],
+            )
+            for row in rows
+        ]
+
+    def topic_exists(self, topic: str) -> bool:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM topics WHERE name = %s", (topic,))
+                return cur.fetchone() is not None
+
+    def history(
+        self,
+        *,
+        topic: str,
+        start: datetime,
+        end: datetime,
+        metric: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[HistoryRecord], int]:
+        metric_clause = "AND m.metric = %s" if metric else ""
+        params: list[object] = [topic, start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
+        if metric:
+            params.append(metric)
+
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM measurements m
+                    JOIN topics t ON t.id = m.topic_id
+                    WHERE t.name = %s
+                      AND m.ts >= %s
+                      AND m.ts <= %s
+                      {metric_clause}
+                    """,
+                    tuple(params),
+                )
+                total = int(cur.fetchone()[0])
+
+                query_params = params + [limit, offset]
+                cur.execute(
+                    f"""
+                    SELECT m.ts, m.metric, m.value
+                    FROM measurements m
+                    JOIN topics t ON t.id = m.topic_id
+                    WHERE t.name = %s
+                      AND m.ts >= %s
+                      AND m.ts <= %s
+                      {metric_clause}
+                    ORDER BY m.ts DESC
+                    LIMIT %s
+                    OFFSET %s
+                    """,
+                    tuple(query_params),
+                )
+                rows = cur.fetchall()
+
+        records = [
+            HistoryRecord(
+                observed_at=row[0],
+                metric=row[1],
+                value=row[2],
+            )
+            for row in rows
+        ]
+        return records, total
+
+    def stats(
+        self,
+        *,
+        topic: str,
+        start: datetime,
+        end: datetime,
+        metric: str | None,
+    ) -> TopicStats:
+        metric_clause = "AND m.metric = %s" if metric else ""
+        params: list[object] = [topic, start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
+        if metric:
+            params.append(metric)
+
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        COUNT(*) AS count,
+                        MIN(m.value) AS minimum,
+                        MAX(m.value) AS maximum,
+                        AVG(m.value)::double precision AS average
+                    FROM measurements m
+                    JOIN topics t ON t.id = m.topic_id
+                    WHERE t.name = %s
+                      AND m.ts >= %s
+                      AND m.ts <= %s
+                      {metric_clause}
+                    """,
+                    tuple(params),
+                )
+                aggregate_row = cur.fetchone()
+
+                cur.execute(
+                    f"""
+                    SELECT m.value, m.ts
+                    FROM measurements m
+                    JOIN topics t ON t.id = m.topic_id
+                    WHERE t.name = %s
+                      AND m.ts >= %s
+                      AND m.ts <= %s
+                      {metric_clause}
+                    ORDER BY m.ts DESC
+                    LIMIT 1
+                    """,
+                    tuple(params),
+                )
+                latest_row = cur.fetchone()
+
+                cur.execute(
+                    f"""
+                    SELECT m.value, m.ts
+                    FROM measurements m
+                    JOIN topics t ON t.id = m.topic_id
+                    WHERE t.name = %s
+                      AND m.ts >= %s
+                      AND m.ts <= %s
+                      {metric_clause}
+                    ORDER BY m.ts ASC
+                    LIMIT 1
+                    """,
+                    tuple(params),
+                )
+                first_row = cur.fetchone()
+
+        return TopicStats(
+            latest=latest_row[0] if latest_row else None,
+            minimum=aggregate_row[1] if aggregate_row else None,
+            maximum=aggregate_row[2] if aggregate_row else None,
+            average=aggregate_row[3] if aggregate_row else None,
+            count=int(aggregate_row[0] if aggregate_row else 0),
+            first_value=first_row[0] if first_row else None,
+            first_observed_at=first_row[1] if first_row else None,
+            latest_observed_at=latest_row[1] if latest_row else None,
+        )
