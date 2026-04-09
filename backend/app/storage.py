@@ -43,6 +43,16 @@ class TopicStats:
     latest_observed_at: datetime | None
 
 
+@dataclass(frozen=True)
+class MqttRuntimeConfig:
+    mqtt_host: str
+    mqtt_port: int
+    mqtt_username: str | None
+    mqtt_password: str | None
+    mqtt_client_id: str
+    updated_at: datetime | None = None
+
+
 class MetricRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -255,4 +265,76 @@ class MetricRepository:
             first_value=first_row[0] if first_row else None,
             first_observed_at=first_row[1] if first_row else None,
             latest_observed_at=latest_row[1] if latest_row else None,
+        )
+
+    def get_mqtt_runtime_config(self) -> MqttRuntimeConfig | None:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT mqtt_host, mqtt_port, mqtt_username, mqtt_password, mqtt_client_id, updated_at
+                    FROM mqtt_runtime_config
+                    WHERE id = 1
+                    """
+                )
+                row = cur.fetchone()
+
+        if row is None:
+            return None
+
+        return MqttRuntimeConfig(
+            mqtt_host=row[0],
+            mqtt_port=row[1],
+            mqtt_username=row[2],
+            mqtt_password=row[3],
+            mqtt_client_id=row[4],
+            updated_at=row[5],
+        )
+
+    def upsert_mqtt_runtime_config(self, config: MqttRuntimeConfig) -> MqttRuntimeConfig:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO mqtt_runtime_config (
+                        id,
+                        mqtt_host,
+                        mqtt_port,
+                        mqtt_username,
+                        mqtt_password,
+                        mqtt_client_id,
+                        updated_at
+                    )
+                    VALUES (1, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (id)
+                    DO UPDATE SET
+                        mqtt_host = EXCLUDED.mqtt_host,
+                        mqtt_port = EXCLUDED.mqtt_port,
+                        mqtt_username = EXCLUDED.mqtt_username,
+                        mqtt_password = EXCLUDED.mqtt_password,
+                        mqtt_client_id = EXCLUDED.mqtt_client_id,
+                        updated_at = NOW()
+                    RETURNING mqtt_host, mqtt_port, mqtt_username, mqtt_password, mqtt_client_id, updated_at
+                    """,
+                    (
+                        config.mqtt_host,
+                        config.mqtt_port,
+                        config.mqtt_username,
+                        config.mqtt_password,
+                        config.mqtt_client_id,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+
+        if row is None:
+            raise RuntimeError("Failed to persist MQTT runtime config")
+
+        return MqttRuntimeConfig(
+            mqtt_host=row[0],
+            mqtt_port=row[1],
+            mqtt_username=row[2],
+            mqtt_password=row[3],
+            mqtt_client_id=row[4],
+            updated_at=row[5],
         )

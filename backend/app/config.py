@@ -20,6 +20,25 @@ class Settings:
     mqtt_client_id: str
     mqtt_topic_map_path: Path
 
+    def with_mqtt_runtime_override(
+        self,
+        *,
+        mqtt_host: str,
+        mqtt_port: int,
+        mqtt_username: str | None,
+        mqtt_password: str | None,
+        mqtt_client_id: str,
+    ) -> "Settings":
+        return Settings(
+            database_url=self.database_url,
+            mqtt_host=mqtt_host,
+            mqtt_port=mqtt_port,
+            mqtt_username=mqtt_username,
+            mqtt_password=mqtt_password,
+            mqtt_client_id=mqtt_client_id,
+            mqtt_topic_map_path=self.mqtt_topic_map_path,
+        )
+
 
 
 def get_settings() -> Settings:

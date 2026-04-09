@@ -23,7 +23,7 @@ function buildRange(hours) {
   return { from: toInputValue(from), to: toInputValue(to) }
 }
 
-async function fetchJson(path, params = {}) {
+async function fetchJson(path, params = {}, options = {}) {
   const url = new URL(path, API_BASE)
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== '') {
@@ -31,11 +31,33 @@ async function fetchJson(path, params = {}) {
     }
   })
 
-  const response = await fetch(url)
+  const response = await fetch(url, options)
   if (!response.ok) {
-    throw new Error(`API request failed (${response.status})`)
+    let message = `API request failed (${response.status})`
+    try {
+      const payload = await response.json()
+      if (payload?.detail) {
+        message = payload.detail
+      }
+    } catch {
+      // no-op
+    }
+    throw new Error(message)
   }
   return response.json()
+}
+
+function TopNav({ title, secondaryLinkHref, secondaryLinkLabel }) {
+  return (
+    <header className="topbar">
+      <h1>{title}</h1>
+      <div className="topbar-links">
+        <a href="#/" className="nav-link">Dashboard</a>
+        <a href="#/config" className="nav-link">MQTT config</a>
+        {secondaryLinkHref ? <a href={secondaryLinkHref} className="nav-link">{secondaryLinkLabel}</a> : null}
+      </div>
+    </header>
+  )
 }
 
 function LoadingState({ label }) {
@@ -222,10 +244,7 @@ function Dashboard() {
 
   return (
     <div className="page">
-      <header className="topbar">
-        <h1>mqttstat dashboard</h1>
-        <a href="#/" className="nav-link">Dashboard</a>
-      </header>
+      <TopNav title="mqttstat dashboard" />
 
       <section className="panel filters">
         <div className="filter-row">
@@ -343,10 +362,7 @@ function TopicDetailPage({ topic, metric }) {
 
   return (
     <div className="page">
-      <header className="topbar">
-        <h1>{topic}</h1>
-        <a href="#/" className="nav-link">← Back to dashboard</a>
-      </header>
+      <TopNav title={topic} secondaryLinkHref="#/" secondaryLinkLabel="← Back" />
 
       <section className="panel filters">
         <p><strong>Metric:</strong> {metric || 'all metrics'}</p>
@@ -381,6 +397,103 @@ function TopicDetailPage({ topic, metric }) {
   )
 }
 
+function ConfigPage() {
+  const [form, setForm] = useState({
+    mqtt_host: '',
+    mqtt_port: 1883,
+    mqtt_username: '',
+    mqtt_password: '',
+    mqtt_client_id: '',
+  })
+  const [loadState, setLoadState] = useState({ loading: true, error: null })
+  const [saveState, setSaveState] = useState({ saving: false, success: null, error: null })
+
+  useEffect(() => {
+    let cancelled = false
+    fetchJson('/api/config/mqtt')
+      .then((data) => {
+        if (!cancelled) {
+          setForm({
+            mqtt_host: data.mqtt_host || '',
+            mqtt_port: data.mqtt_port || 1883,
+            mqtt_username: data.mqtt_username || '',
+            mqtt_password: '',
+            mqtt_client_id: data.mqtt_client_id || '',
+          })
+          setLoadState({ loading: false, error: null })
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setLoadState({ loading: false, error: error.message })
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const onChange = (field) => (event) => {
+    const value = field === 'mqtt_port' ? Number(event.target.value) : event.target.value
+    setForm((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const onSubmit = async (event) => {
+    event.preventDefault()
+    setSaveState({ saving: true, success: null, error: null })
+    try {
+      await fetchJson('/api/config/mqtt', {}, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      setSaveState({ saving: false, success: 'Saved and MQTT client reloaded.', error: null })
+      setForm((prev) => ({ ...prev, mqtt_password: '' }))
+    } catch (error) {
+      setSaveState({ saving: false, success: null, error: error.message })
+    }
+  }
+
+  return (
+    <div className="page">
+      <TopNav title="MQTT runtime config" />
+      <section className="panel">
+        {loadState.loading ? <LoadingState label="config" /> : null}
+        {loadState.error ? <ErrorState message={loadState.error} /> : null}
+        {!loadState.loading && !loadState.error ? (
+          <form className="config-form" onSubmit={onSubmit}>
+            <label>
+              Broker host
+              <input type="text" value={form.mqtt_host} onChange={onChange('mqtt_host')} required />
+            </label>
+            <label>
+              Broker port
+              <input type="number" min="1" max="65535" value={form.mqtt_port} onChange={onChange('mqtt_port')} required />
+            </label>
+            <label>
+              Username
+              <input type="text" value={form.mqtt_username} onChange={onChange('mqtt_username')} />
+            </label>
+            <label>
+              Password (leave blank to clear)
+              <input type="password" value={form.mqtt_password} onChange={onChange('mqtt_password')} />
+            </label>
+            <label>
+              Client ID
+              <input type="text" value={form.mqtt_client_id} onChange={onChange('mqtt_client_id')} required />
+            </label>
+            <button type="submit" className="save-btn" disabled={saveState.saving}>
+              {saveState.saving ? 'Saving…' : 'Save config'}
+            </button>
+          </form>
+        ) : null}
+        {saveState.success ? <div className="state success">{saveState.success}</div> : null}
+        {saveState.error ? <ErrorState message={saveState.error} /> : null}
+      </section>
+    </div>
+  )
+}
+
 function parseRoute() {
   const [pathPart, queryPart] = window.location.hash.replace(/^#/, '').split('?')
   const path = pathPart || '/'
@@ -390,6 +503,9 @@ function parseRoute() {
     const topic = decodeURIComponent(path.replace('/topics/', ''))
     const metric = query.get('metric')
     return { page: 'topic', topic, metric }
+  }
+  if (path === '/config') {
+    return { page: 'config' }
   }
 
   return { page: 'dashboard' }
@@ -406,6 +522,9 @@ function AppRouter() {
 
   if (route.page === 'topic') {
     return <TopicDetailPage topic={route.topic} metric={route.metric} />
+  }
+  if (route.page === 'config') {
+    return <ConfigPage />
   }
 
   return <Dashboard />

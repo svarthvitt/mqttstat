@@ -65,6 +65,27 @@ cp .env.example .env
 - `MQTT_CLIENT_ID`: MQTT client identifier used by backend.
 - `MQTT_TOPIC_MAP_PATH`: path to YAML topic mapping file loaded at backend startup.
 
+## Configure MQTT from UI
+
+You can manage broker connectivity at runtime in the frontend:
+
+1. Open the frontend (`http://localhost:${FRONTEND_PORT}`).
+2. Click **MQTT config** in the top navigation (route `#/config`).
+3. Set broker host, port, username/password, and client ID.
+4. Click **Save config**.
+
+### Runtime behavior after save
+
+- Saving writes the values into backend persistence (`mqtt_runtime_config` table).
+- The backend immediately reloads and reconnects the MQTT ingest client using the new values (no container restart required).
+- If the new connection fails, the API returns an error and the UI shows that failure.
+
+### Security caveats
+
+- The MQTT password is persisted in the database as plaintext in `mqtt_runtime_config.mqtt_password`.
+- The API never returns the password value directly; `GET /api/config/mqtt` exposes only a `has_password` boolean.
+- Restrict network/database access and use infrastructure-level controls (private network, encrypted disk, backups policy, secret rotation).
+
 ## Startup commands
 
 ### 1) Build and run core services
