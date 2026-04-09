@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from .config import Settings, get_settings
 from .migrations import MigrationRunner
 from .mqtt_client import MQTTIngestClient, TopicMap
-from .storage import MetricRepository, MqttRuntimeConfig, TopicStats
+from .storage import AlertRule, MetricRepository, MqttRuntimeConfig, TopicStats
 
 
 class TimeRange(str, Enum):
@@ -112,6 +112,35 @@ class MqttConfigTestResponse(BaseModel):
     detail: str
 
 
+class AlertRuleRequest(BaseModel):
+    id: int | None = None
+    topic: str = Field(min_length=1)
+    metric: str = Field(min_length=1)
+    condition: str = Field(pattern="^(gt|lt|eq|gte|lte)$")
+    threshold: float
+    enabled: bool = True
+
+
+class AlertRuleResponse(BaseModel):
+    id: int
+    topic: str
+    metric: str
+    condition: str
+    threshold: float
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AlertHistoryResponse(BaseModel):
+    id: int
+    rule_id: int
+    topic: str
+    metric: str
+    observed_value: float
+    ts: datetime
+
+
 class MQTTClientService:
     def __init__(self, repository: MetricRepository, topic_map: TopicMap, settings: Settings) -> None:
         self._repository = repository
@@ -138,6 +167,11 @@ class MQTTClientService:
                 repository=self._repository,
             )
             self._client.start()
+
+    def reload_alerts(self) -> None:
+        with self._lock:
+            if self._client is not None:
+                self._client.reload_rules()
 
     def stop(self) -> None:
         with self._lock:
@@ -455,3 +489,73 @@ def topic_stats(
         count=stats.count,
         trend=trend,
     )
+
+
+@app.get("/api/alerts/rules", response_model=list[AlertRuleResponse], tags=["alerts"])
+def list_alert_rules() -> list[AlertRuleResponse]:
+    repository: MetricRepository = app.state.repository
+    rules = repository.list_alert_rules()
+    return [
+        AlertRuleResponse(
+            id=r.id,
+            topic=r.topic,
+            metric=r.metric,
+            condition=r.condition,
+            threshold=r.threshold,
+            enabled=r.enabled,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+        )
+        for r in rules
+    ]
+
+
+@app.post("/api/alerts/rules", response_model=AlertRuleResponse, tags=["alerts"])
+def create_alert_rule(payload: AlertRuleRequest) -> AlertRuleResponse:
+    repository: MetricRepository = app.state.repository
+    mqtt_service: MQTTClientService = app.state.mqtt_service
+    rule = AlertRule(
+        id=payload.id,
+        topic=payload.topic,
+        metric=payload.metric,
+        condition=payload.condition,
+        threshold=payload.threshold,
+        enabled=payload.enabled,
+    )
+    saved = repository.upsert_alert_rule(rule)
+    mqtt_service.reload_alerts()
+    return AlertRuleResponse(
+        id=saved.id,
+        topic=saved.topic,
+        metric=saved.metric,
+        condition=saved.condition,
+        threshold=saved.threshold,
+        enabled=saved.enabled,
+        created_at=saved.created_at,
+        updated_at=saved.updated_at,
+    )
+
+
+@app.delete("/api/alerts/rules/{rule_id}", status_code=204, tags=["alerts"])
+def delete_alert_rule(rule_id: int) -> None:
+    repository: MetricRepository = app.state.repository
+    mqtt_service: MQTTClientService = app.state.mqtt_service
+    repository.delete_alert_rule(rule_id)
+    mqtt_service.reload_alerts()
+
+
+@app.get("/api/alerts/history", response_model=list[AlertHistoryResponse], tags=["alerts"])
+def get_alert_history(limit: int = Query(default=50, ge=1, le=200)) -> list[AlertHistoryResponse]:
+    repository: MetricRepository = app.state.repository
+    history = repository.get_alert_history(limit=limit)
+    return [
+        AlertHistoryResponse(
+            id=h.id,
+            rule_id=h.rule_id,
+            topic=h.topic,
+            metric=h.metric,
+            observed_value=h.observed_value,
+            ts=h.ts,
+        )
+        for h in history
+    ]

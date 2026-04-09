@@ -101,6 +101,7 @@ class MQTTIngestClient:
     ) -> None:
         self._topic_map = topic_map
         self._repository = repository
+        self._alert_rules_cache: list[Any] = []
 
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
         if username:
@@ -113,6 +114,7 @@ class MQTTIngestClient:
 
     def start(self) -> None:
         logger.info("Connecting MQTT client to %s:%s", self._host, self._port)
+        self.reload_rules()
         self._client.connect(self._host, self._port, keepalive=60)
         self._client.loop_start()
 
@@ -159,18 +161,51 @@ class MQTTIngestClient:
                     payload_json=payload,
                 )
             )
+            self._check_alerts(topic, field_mapping.metric_key, numeric_value)
 
     def _handle_raw_numeric(self, topic: str, raw_payload: str, observed_at: datetime, mapping: TopicMapping) -> None:
         numeric_value = float(raw_payload.strip())
+        metric_key = mapping.metric_key or topic
         self._repository.insert(
             MetricRecord(
                 topic=topic,
-                metric_key=mapping.metric_key or topic,
+                metric_key=metric_key,
                 numeric_value=numeric_value,
                 raw_payload=raw_payload,
                 observed_at=observed_at,
             )
         )
+        self._check_alerts(topic, metric_key, numeric_value)
+
+    def reload_rules(self) -> None:
+        try:
+            self._alert_rules_cache = self._repository.get_active_alert_rules()
+            logger.info("Alert rules cache reloaded: %d rules active", len(self._alert_rules_cache))
+        except Exception:
+            logger.exception("Failed to reload alert rules cache")
+
+    def _check_alerts(self, topic: str, metric_key: str, value: float) -> None:
+        try:
+            for rule in self._alert_rules_cache:
+                if rule.topic == topic and rule.metric == metric_key:
+                    triggered = False
+                    if rule.condition == "gt" and value > rule.threshold:
+                        triggered = True
+                    elif rule.condition == "lt" and value < rule.threshold:
+                        triggered = True
+                    elif rule.condition == "eq" and value == rule.threshold:
+                        triggered = True
+                    elif rule.condition == "gte" and value >= rule.threshold:
+                        triggered = True
+                    elif rule.condition == "lte" and value <= rule.threshold:
+                        triggered = True
+
+                    if triggered:
+                        logger.warning("Alert triggered! Topic: %s, Metric: %s, Value: %s %s %s",
+                                       topic, metric_key, value, rule.condition, rule.threshold)
+                        self._repository.insert_alert_history(rule.id, value)
+        except Exception:
+            logger.exception("Failed to check alerts for topic=%s metric=%s", topic, metric_key)
 
 
 def _extract_path(payload: dict[str, Any], field_path: str) -> Any:
