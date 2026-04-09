@@ -1,7 +1,7 @@
 services:
-  db:
-    image: postgres:16-alpine
-    container_name: mqttstat-db
+  postgres-timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: mqttstat-postgres-timescaledb
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-mqttstat}
@@ -12,6 +12,47 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mqttstat} -d ${POSTGRES_DB:-mqttstat}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mqttstat-migrate
+    profiles: ["ops"]
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mqttstat}:${POSTGRES_PASSWORD:-mqttstat}@postgres-timescaledb:5432/${POSTGRES_DB:-mqttstat}
+    command: ["python", "-m", "app.run_migrations"]
+    depends_on:
+      postgres-timescaledb:
+        condition: service_healthy
+
+  seed:
+    image: timescale/timescaledb:latest-pg16
+    container_name: mqttstat-seed
+    profiles: ["ops"]
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-mqttstat}
+    volumes:
+      - ./infra/seeds:/seeds:ro
+    command: >
+      sh -c "
+        psql -h postgres-timescaledb -U ${POSTGRES_USER:-mqttstat} -d ${POSTGRES_DB:-mqttstat} -v ON_ERROR_STOP=1 -f /seeds/001_sample_data.sql
+      "
+    depends_on:
+      postgres-timescaledb:
+        condition: service_healthy
 
   backend:
     build:
@@ -22,26 +63,39 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-mqttstat}:${POSTGRES_PASSWORD:-mqttstat}@db:5432/${POSTGRES_DB:-mqttstat}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mqttstat}:${POSTGRES_PASSWORD:-mqttstat}@postgres-timescaledb:5432/${POSTGRES_DB:-mqttstat}
     depends_on:
-      - db
+      postgres-timescaledb:
+        condition: service_healthy
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
     container_name: mqttstat-frontend
     restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
-      - "${FRONTEND_PORT:-5173}:5173"
+      - "${FRONTEND_PORT:-5173}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
 volumes:
   pg_data:
+    name: mqttstat_pg_data
