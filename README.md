@@ -162,3 +162,169 @@ docker compose restart backend
 - Backend health: `http://localhost:${BACKEND_PORT}/health`
 - Frontend health: `http://localhost:${FRONTEND_PORT}/healthz`
 - PostgreSQL: `localhost:${POSTGRES_PORT}`
+
+## Publish images to Docker registry
+
+Use this flow when you want pre-built images for deployment hosts (instead of building directly on each host).
+
+### Prerequisites
+
+- Docker Buildx is available:
+
+  ```bash
+  docker buildx version
+  ```
+
+- You have a registry account and created repositories for both images:
+  - `mqttstat-backend`
+  - `mqttstat-frontend`
+
+Set variables used in the examples:
+
+```bash
+export REGISTRY_USER="your-registry-user"
+export VERSION="1.2.0"
+```
+
+### Recommended image naming
+
+- Backend: `REGISTRY_USER/mqttstat-backend:<version>`
+- Frontend: `REGISTRY_USER/mqttstat-frontend:<version>`
+
+Examples:
+- `${REGISTRY_USER}/mqttstat-backend:${VERSION}`
+- `${REGISTRY_USER}/mqttstat-frontend:${VERSION}`
+
+### Authenticate to registry
+
+#### Docker Hub
+
+```bash
+docker login
+```
+
+#### GHCR (`ghcr.io`) variant
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+```
+
+For GHCR image names, prefix with `ghcr.io/`, for example:
+- `ghcr.io/${GHCR_USER}/mqttstat-backend:${VERSION}`
+- `ghcr.io/${GHCR_USER}/mqttstat-frontend:${VERSION}`
+
+### Build and push from repo root
+
+Run these commands from the repository root (`/workspace/mqttstat`).
+
+#### Backend (`backend/Dockerfile`)
+
+Single-arch (example: `linux/amd64`):
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  -f backend/Dockerfile \
+  -t "${REGISTRY_USER}/mqttstat-backend:${VERSION}" \
+  --push \
+  .
+```
+
+Optional multi-arch (`linux/amd64,linux/arm64`):
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -f backend/Dockerfile \
+  -t "${REGISTRY_USER}/mqttstat-backend:${VERSION}" \
+  --push \
+  .
+```
+
+#### Frontend (`frontend/Dockerfile`)
+
+Single-arch (example: `linux/amd64`):
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  -f frontend/Dockerfile \
+  -t "${REGISTRY_USER}/mqttstat-frontend:${VERSION}" \
+  --push \
+  .
+```
+
+Optional multi-arch (`linux/amd64,linux/arm64`):
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -f frontend/Dockerfile \
+  -t "${REGISTRY_USER}/mqttstat-frontend:${VERSION}" \
+  --push \
+  .
+```
+
+### Versioning and tagging policy
+
+Use semantic versions for immutable releases (for example: `1.2.0`) and optionally maintain a moving `latest` tag.
+
+Example tag and push flow:
+
+```bash
+# Backend
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -f backend/Dockerfile \
+  -t "${REGISTRY_USER}/mqttstat-backend:${VERSION}" \
+  -t "${REGISTRY_USER}/mqttstat-backend:latest" \
+  --push \
+  .
+
+# Frontend
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -f frontend/Dockerfile \
+  -t "${REGISTRY_USER}/mqttstat-frontend:${VERSION}" \
+  -t "${REGISTRY_USER}/mqttstat-frontend:latest" \
+  --push \
+  .
+```
+
+### Verify published images
+
+```bash
+docker pull "${REGISTRY_USER}/mqttstat-backend:${VERSION}"
+docker pull "${REGISTRY_USER}/mqttstat-frontend:${VERSION}"
+```
+
+(And optionally verify `:latest` similarly.)
+
+### Compose deployment note (`image:` instead of `build:`)
+
+On deployment hosts, prefer pulling published images rather than building locally. In `docker-compose.yml`, replace `build:` with `image:` for backend/frontend services.
+
+Example:
+
+```yaml
+services:
+  backend:
+    image: ${BACKEND_IMAGE:-your-registry-user/mqttstat-backend:1.2.0}
+    # build: ./backend
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-your-registry-user/mqttstat-frontend:1.2.0}
+    # build: ./frontend
+```
+
+You can then provide `BACKEND_IMAGE` and `FRONTEND_IMAGE` via `.env` for each environment.
+
+### Release checklist
+
+Before announcing a release, quickly confirm:
+
+- Tag chosen and consistent (semantic version + optional `latest`).
+- Images pushed successfully for backend and frontend.
+- `docker pull` verification succeeded for published tags.
+- Deployment Compose/env updated to target the new image tags.
+- Deployment completed and services are healthy.
