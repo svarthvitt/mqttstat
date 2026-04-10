@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || window.location.origin
 
 const PRESET_RANGES = [
   { label: '1h', hours: 1 },
@@ -533,18 +533,28 @@ function ConfigPage() {
   }, [])
 
   const onChange = (field) => (event) => {
-    const value = field === 'mqtt_port' ? Number(event.target.value) : event.target.value
-    setForm((prev) => ({ ...prev, [field]: value }))
+    setForm((prev) => ({ ...prev, [field]: event.target.value }))
   }
 
   const onSubmit = async (event) => {
     event.preventDefault()
     setSaveState({ saving: true, success: null, error: null })
+    const parsedPort = Number(form.mqtt_port)
+    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      setSaveState({ saving: false, success: null, error: 'Broker port must be an integer between 1 and 65535.' })
+      return
+    }
+
+    const payload = {
+      ...form,
+      mqtt_port: parsedPort,
+    }
+
     try {
       await fetchJson('/api/config/mqtt', {}, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       })
       setSaveState({ saving: false, success: 'Saved and MQTT client reloaded.', error: null })
       setForm((prev) => ({ ...prev, mqtt_password: '' }))
