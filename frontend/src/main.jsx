@@ -2,7 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || window.location.origin
+const configuredApiBase = import.meta.env.VITE_API_BASE_URL
+const fallbackApiBases = [
+  window.location.origin,
+  `${window.location.protocol}//${window.location.hostname}:8000`,
+]
+const API_BASE_CANDIDATES = configuredApiBase
+  ? [configuredApiBase]
+  : [...new Set(fallbackApiBases)]
 
 const PRESET_RANGES = [
   { label: '1h', hours: 1 },
@@ -24,27 +31,37 @@ function buildRange(hours) {
 }
 
 async function fetchJson(path, params = {}, options = {}) {
-  const url = new URL(path, API_BASE)
-  Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== '') {
-      url.searchParams.set(key, value)
-    }
-  })
+  let networkError = null
 
-  const response = await fetch(url, options)
-  if (!response.ok) {
-    let message = `API request failed (${response.status})`
-    try {
-      const payload = await response.json()
-      if (payload?.detail) {
-        message = payload.detail
+  for (const apiBase of API_BASE_CANDIDATES) {
+    const url = new URL(path, apiBase)
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(key, value)
       }
-    } catch {
-      // no-op
+    })
+
+    try {
+      const response = await fetch(url, options)
+      if (!response.ok) {
+        let message = `API request failed (${response.status})`
+        try {
+          const payload = await response.json()
+          if (payload?.detail) {
+            message = payload.detail
+          }
+        } catch {
+          // no-op
+        }
+        throw new Error(message)
+      }
+      return response.json()
+    } catch (error) {
+      networkError = error
     }
-    throw new Error(message)
   }
-  return response.json()
+
+  throw networkError || new Error('API request failed')
 }
 
 function TopNav({ title, secondaryLinkHref, secondaryLinkLabel }) {
