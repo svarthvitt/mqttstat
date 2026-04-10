@@ -7,6 +7,7 @@ from pathlib import Path
 import threading
 
 from fastapi import FastAPI, HTTPException, Path as PathParam, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from .config import Settings, get_settings
@@ -234,6 +235,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="mqttstat API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _to_utc(value: datetime) -> datetime:
