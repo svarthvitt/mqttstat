@@ -25,12 +25,9 @@ class TimeRange(str, Enum):
 
 
 class TopicItemResponse(BaseModel):
-    topic: str = Field(description="Topic name.")
-    metric_count: int = Field(description="Total measurements available for this topic.")
-    latest_observed_at: datetime | None = Field(
-        default=None,
-        description="Timestamp of the latest measurement for this topic.",
-    )
+    id: str
+    topic: str
+    metric: str
 
 
 class TopicListResponse(BaseModel):
@@ -73,6 +70,43 @@ class StatsResponse(BaseModel):
     avg: float | None
     count: int
     trend: TrendResponse
+
+
+class DashboardCard(BaseModel):
+    key: str
+    label: str
+    value: str
+    hint: str | None = None
+
+
+class DashboardKPIS(BaseModel):
+    latest: float | None = None
+    min: float | None = None
+    max: float | None = None
+    avg: float | None = None
+    count: int = 0
+    trend_pct: float | None = None
+
+
+class DashboardResponse(BaseModel):
+    cards: list[DashboardCard]
+    kpis: DashboardKPIS
+
+
+class TimeseriesPoint(BaseModel):
+    ts: datetime
+    value: float
+
+
+class TimeseriesEntry(BaseModel):
+    id: str
+    label: str
+    color: str
+    points: list[TimeseriesPoint]
+
+
+class TimeseriesResponse(BaseModel):
+    series: list[TimeseriesEntry]
 
 
 class MqttConfigUpdateRequest(BaseModel):
@@ -310,6 +344,102 @@ def _to_mqtt_response(config: MqttRuntimeConfig) -> MqttConfigResponse:
     )
 
 
+@app.get("/api/dashboard", response_model=DashboardResponse, tags=["dashboard"])
+def get_dashboard(
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+) -> DashboardResponse:
+    repository: MetricRepository = app.state.repository
+    now = datetime.now(timezone.utc)
+    resolved_end = _to_utc(end) if end else now
+    resolved_start = _to_utc(start) if start else resolved_end - timedelta(hours=24)
+
+    # Simplified dashboard data - in a real app this would be more complex
+    topics = repository.list_topics()
+    total_measurements = sum(t.metric_count for t in topics)
+
+    # Calculate global KPIs across all topics/metrics for the range
+    # This is a bit expensive but okay for a small app
+    all_stats = [
+        repository.stats(topic=t.name, start=resolved_start, end=resolved_end)
+        for t in topics
+    ]
+
+    latest_vals = [s.latest for s in all_stats if s.latest is not None]
+    min_vals = [s.minimum for s in all_stats if s.minimum is not None]
+    max_vals = [s.maximum for s in all_stats if s.maximum is not None]
+    avg_vals = [s.average for s in all_stats if s.average is not None]
+    total_count = sum(s.count for s in all_stats)
+
+    kpis = DashboardKPIS(
+        latest=latest_vals[0] if latest_vals else None,
+        min=min(min_vals) if min_vals else None,
+        max=max(max_vals) if max_vals else None,
+        avg=sum(avg_vals) / len(avg_vals) if avg_vals else None,
+        count=total_count,
+        trend_pct=None, # Trend across multiple topics is hard to define simply
+    )
+
+    cards = [
+        DashboardCard(key="topics", label="Active Topics", value=str(len(topics))),
+        DashboardCard(key="measurements", label="Total Measurements", value=str(total_measurements)),
+    ]
+    if topics:
+        latest_topic = max(topics, key=lambda t: t.latest_observed_at or datetime.min.replace(tzinfo=timezone.utc))
+        cards.append(DashboardCard(
+            key="latest_topic",
+            label="Most Recent Topic",
+            value=latest_topic.name,
+            hint=f"Updated {latest_topic.latest_observed_at.strftime('%H:%M:%S')}" if latest_topic.latest_observed_at else None
+        ))
+
+    return DashboardResponse(cards=cards, kpis=kpis)
+
+
+@app.get("/api/timeseries", response_model=TimeseriesResponse, tags=["dashboard"])
+def get_timeseries(
+    series: str = Query(description="Comma-separated list of topic:metric IDs"),
+    start: datetime | None = Query(default=None, alias="from"),
+    end: datetime | None = Query(default=None, alias="to"),
+) -> TimeseriesResponse:
+    repository: MetricRepository = app.state.repository
+    now = datetime.now(timezone.utc)
+    resolved_end = _to_utc(end) if end else now
+    resolved_start = _to_utc(start) if start else resolved_end - timedelta(hours=24)
+
+    colors = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"]
+    result_series = []
+
+    ids = [s.strip() for s in series.split(",") if s.strip()]
+    for i, series_id in enumerate(ids):
+        if ":" not in series_id:
+            continue
+        topic, metric = series_id.split(":", 1)
+
+        records, _ = repository.history(
+            topic=topic,
+            metric=metric,
+            start=resolved_start,
+            end=resolved_end,
+            limit=500,
+            offset=0
+        )
+
+        points = [
+            TimeseriesPoint(ts=r.observed_at, value=r.value)
+            for r in reversed(records) # Return in chronological order
+        ]
+
+        result_series.append(TimeseriesEntry(
+            id=series_id,
+            label=f"{topic} / {metric}",
+            color=colors[i % len(colors)],
+            points=points
+        ))
+
+    return TimeseriesResponse(series=result_series)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -392,20 +522,20 @@ def test_mqtt_config(payload: MqttConfigUpdateRequest) -> MqttConfigTestResponse
 @app.get(
     "/api/topics",
     response_model=TopicListResponse,
-    summary="List all topics",
+    summary="List all unique topic-metric pairs",
     tags=["topics"],
 )
 def list_topics() -> TopicListResponse:
-    repository = MetricRepository(get_settings().database_url)
-    topics = repository.list_topics()
+    repository: MetricRepository = app.state.repository
+    items = repository.list_topic_metrics()
     return TopicListResponse(
         topics=[
             TopicItemResponse(
-                topic=item.name,
-                metric_count=item.metric_count,
-                latest_observed_at=item.latest_observed_at,
+                id=item.id,
+                topic=item.topic,
+                metric=item.metric,
             )
-            for item in topics
+            for item in items
         ]
     )
 

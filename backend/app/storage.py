@@ -18,6 +18,13 @@ class MetricRecord:
 
 
 @dataclass(frozen=True)
+class TopicMetricItem:
+    id: str
+    topic: str
+    metric: str
+
+
+@dataclass(frozen=True)
 class TopicSummary:
     name: str
     metric_count: int
@@ -144,6 +151,30 @@ class MetricRepository:
                 name=row[0],
                 metric_count=row[1],
                 latest_observed_at=row[2],
+            )
+            for row in rows
+        ]
+
+    def list_topic_metrics(self) -> list[TopicMetricItem]:
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT
+                        t.name,
+                        m.metric
+                    FROM topics t
+                    JOIN measurements m ON m.topic_id = t.id
+                    ORDER BY t.name ASC, m.metric ASC
+                    """
+                )
+                rows = cur.fetchall()
+
+        return [
+            TopicMetricItem(
+                id=f"{row[0]}:{row[1]}",
+                topic=row[0],
+                metric=row[1],
             )
             for row in rows
         ]

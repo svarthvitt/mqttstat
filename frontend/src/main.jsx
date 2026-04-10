@@ -506,6 +506,7 @@ function ConfigPage() {
   })
   const [loadState, setLoadState] = useState({ loading: true, error: null })
   const [saveState, setSaveState] = useState({ saving: false, success: null, error: null })
+  const [testState, setTestState] = useState({ testing: false, success: null, error: null })
 
   useEffect(() => {
     let cancelled = false
@@ -563,13 +564,44 @@ function ConfigPage() {
     }
   }
 
+  const onTest = async (event) => {
+    event.preventDefault()
+    setTestState({ testing: true, success: null, error: null })
+    const parsedPort = Number(form.mqtt_port)
+    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      setTestState({ testing: false, success: null, error: 'Broker port must be an integer.' })
+      return
+    }
+
+    try {
+      const res = await fetchJson('/api/config/mqtt/test', {}, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, mqtt_port: parsedPort }),
+      })
+      if (res && res.ok) {
+        setTestState({ testing: false, success: 'Connection test successful!', error: null })
+      } else {
+        setTestState({ testing: false, success: null, error: (res && res.detail) || 'Connection test failed.' })
+      }
+    } catch (error) {
+      setTestState({ testing: false, success: null, error: error.message })
+    }
+  }
+
   return (
     <div className="page">
       <TopNav title="MQTT runtime config" />
       <section className="panel">
         {loadState.loading ? <LoadingState label="config" /> : null}
-        {loadState.error ? <ErrorState message={loadState.error} /> : null}
-        {!loadState.loading && !loadState.error ? (
+        {loadState.error ? (
+          <div style={{ marginBottom: '1rem' }}>
+            <ErrorState message={`Failed to load current config: ${loadState.error}`} />
+            <p>You can still enter and save new configuration details below.</p>
+          </div>
+        ) : null}
+
+        {(!loadState.loading) ? (
           <form className="config-form" onSubmit={onSubmit}>
             <label>
               Broker host
@@ -591,13 +623,23 @@ function ConfigPage() {
               Client ID
               <input type="text" value={form.mqtt_client_id} onChange={onChange('mqtt_client_id')} required />
             </label>
-            <button type="submit" className="save-btn" disabled={saveState.saving}>
-              {saveState.saving ? 'Saving…' : 'Save config'}
-            </button>
+
+            <div className="button-group" style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+              <button type="submit" className="save-btn" disabled={saveState.saving}>
+                {saveState.saving ? 'Saving…' : 'Save config'}
+              </button>
+              <button type="button" className="test-btn" onClick={onTest} disabled={testState.testing}>
+                {testState.testing ? 'Testing…' : 'Test connection'}
+              </button>
+            </div>
           </form>
         ) : null}
-        {saveState.success ? <div className="state success">{saveState.success}</div> : null}
+
+        {saveState.success ? <div className="state success" style={{ marginTop: '1rem' }}>{saveState.success}</div> : null}
         {saveState.error ? <ErrorState message={saveState.error} /> : null}
+
+        {testState.success ? <div className="state success" style={{ marginTop: '1rem' }}>{testState.success}</div> : null}
+        {testState.error ? <div style={{ marginTop: '1rem' }}><ErrorState message={testState.error} /></div> : null}
       </section>
     </div>
   )
