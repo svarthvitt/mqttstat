@@ -11,6 +11,83 @@ const fallbackApiBases = import.meta.env.PROD
 const API_BASE_CANDIDATES = [...new Set(fallbackApiBases.filter(Boolean))]
 const API_BASE_DEBUG_ENABLED = import.meta.env.DEV || import.meta.env.VITE_API_BASE_DEBUG === 'true'
 const FETCH_DEBUG_ENABLED = import.meta.env.VITE_DEBUG_FETCH === 'true'
+const DEBUG_STORAGE_KEY = 'mqttstat.debug.enabled'
+const DEBUG_LOG_STORAGE_KEY = 'mqttstat.debug.logs'
+const MAX_DEBUG_LOGS = 250
+
+function readDebugEnabled() {
+  const searchParams = new URLSearchParams(window.location.search)
+  const [_, hashQuery = ''] = (window.location.hash || '').split('?')
+  const hashParams = new URLSearchParams(hashQuery)
+
+  if (searchParams.get('debug') === '1' || hashParams.get('debug') === '1') {
+    window.localStorage.setItem(DEBUG_STORAGE_KEY, '1')
+    return true
+  }
+
+  return window.localStorage.getItem(DEBUG_STORAGE_KEY) === '1'
+}
+
+let debugEnabled = readDebugEnabled()
+
+function readPersistedDebugLogs() {
+  try {
+    const raw = window.localStorage.getItem(DEBUG_LOG_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+const debugListeners = new Set()
+const debugLogEntries = readPersistedDebugLogs()
+
+function notifyDebugListeners() {
+  const snapshot = [...debugLogEntries]
+  debugListeners.forEach((listener) => listener(snapshot, debugEnabled))
+}
+
+function persistDebugLogs() {
+  try {
+    window.localStorage.setItem(DEBUG_LOG_STORAGE_KEY, JSON.stringify(debugLogEntries))
+  } catch {
+    // no-op
+  }
+}
+
+function addDebugLog(entry) {
+  if (!debugEnabled) return
+  debugLogEntries.push({ ts: new Date().toISOString(), ...entry })
+  if (debugLogEntries.length > MAX_DEBUG_LOGS) {
+    debugLogEntries.splice(0, debugLogEntries.length - MAX_DEBUG_LOGS)
+  }
+  persistDebugLogs()
+  notifyDebugListeners()
+}
+
+function setDebugMode(enabled) {
+  debugEnabled = enabled
+  if (enabled) {
+    window.localStorage.setItem(DEBUG_STORAGE_KEY, '1')
+  } else {
+    window.localStorage.removeItem(DEBUG_STORAGE_KEY)
+  }
+  notifyDebugListeners()
+}
+
+function clearDebugLogs() {
+  debugLogEntries.splice(0, debugLogEntries.length)
+  window.localStorage.removeItem(DEBUG_LOG_STORAGE_KEY)
+  notifyDebugListeners()
+}
+
+function subscribeToDebug(listener) {
+  debugListeners.add(listener)
+  listener([...debugLogEntries], debugEnabled)
+  return () => debugListeners.delete(listener)
+}
 
 const PRESET_RANGES = [
   { label: '1h', hours: 1 },
@@ -52,6 +129,12 @@ async function fetchJson(path, params = {}, options = {}) {
       headers.set('X-Request-ID', requestId)
       console.debug(`[fetch-debug] request url=${url.toString()} requestId=${requestId}`)
     }
+    addDebugLog({
+      type: 'request',
+      method: options.method || 'GET',
+      url: url.toString(),
+      requestId,
+    })
 
     try {
       const response = await fetch(url, { ...options, headers })
@@ -65,18 +148,125 @@ async function fetchJson(path, params = {}, options = {}) {
         } catch {
           // no-op
         }
+        addDebugLog({
+          type: 'response-error',
+          method: options.method || 'GET',
+          status: response.status,
+          url: url.toString(),
+          message,
+          requestId,
+        })
         throw new Error(message)
       }
+      addDebugLog({
+        type: 'response-ok',
+        method: options.method || 'GET',
+        status: response.status,
+        url: url.toString(),
+        requestId,
+      })
       return response.json()
     } catch (error) {
       if (API_BASE_DEBUG_ENABLED) {
         console.debug(`[api-base] request to ${apiBase} failed for ${path}`, error)
       }
+      addDebugLog({
+        type: 'network-error',
+        method: options.method || 'GET',
+        url: url.toString(),
+        message: error?.message || String(error),
+        requestId,
+      })
       networkError = error
     }
   }
 
+  addDebugLog({
+    type: 'request-failed-all-candidates',
+    method: options.method || 'GET',
+    path,
+    message: networkError?.message || 'API request failed',
+    apiBases: API_BASE_CANDIDATES,
+  })
   throw networkError || new Error('API request failed')
+}
+
+function DebugPanel() {
+  const [open, setOpen] = useState(false)
+  const [enabled, setEnabled] = useState(debugEnabled)
+  const [entries, setEntries] = useState(() => [...debugLogEntries])
+
+  useEffect(() => subscribeToDebug((nextEntries, isEnabled) => {
+    setEntries(nextEntries)
+    setEnabled(isEnabled)
+  }), [])
+
+  const onToggleDebug = (event) => {
+    const nextEnabled = event.target.checked
+    setDebugMode(nextEnabled)
+    addDebugLog({
+      type: 'debug-mode',
+      message: nextEnabled ? 'Enabled debug mode' : 'Disabled debug mode',
+      location: window.location.href,
+      apiBases: API_BASE_CANDIDATES,
+    })
+  }
+
+  const onCopyLogs = async () => {
+    const payload = JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      location: window.location.href,
+      apiBases: API_BASE_CANDIDATES,
+      logs: entries,
+    }, null, 2)
+    try {
+      await navigator.clipboard.writeText(payload)
+      window.alert('Copied debug logs to clipboard.')
+    } catch {
+      window.alert('Copy failed. Use Download logs instead.')
+    }
+  }
+
+  const onDownloadLogs = () => {
+    const payload = JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      location: window.location.href,
+      apiBases: API_BASE_CANDIDATES,
+      logs: entries,
+    }, null, 2)
+    const blob = new Blob([payload], { type: 'application/json' })
+    const href = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = href
+    link.download = `mqttstat-debug-${Date.now()}.json`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(href)
+  }
+
+  return (
+    <aside className={`debug-panel ${open ? 'open' : ''}`}>
+      <button type="button" className="debug-toggle" onClick={() => setOpen((prev) => !prev)}>
+        {open ? 'Hide debug' : 'Debug mode'}
+      </button>
+      {open ? (
+        <div className="debug-content">
+          <label className="debug-enable">
+            <input type="checkbox" checked={enabled} onChange={onToggleDebug} />
+            Enable request debug logs
+          </label>
+          <p className="debug-note">Tip: open with <code>?debug=1</code> once to persist this mode.</p>
+          <div className="debug-actions">
+            <button type="button" onClick={onCopyLogs} disabled={!entries.length}>Copy logs</button>
+            <button type="button" onClick={onDownloadLogs} disabled={!entries.length}>Download logs</button>
+            <button type="button" onClick={clearDebugLogs} disabled={!entries.length}>Clear</button>
+          </div>
+          <pre className="debug-log">{JSON.stringify(entries.slice(-50), null, 2)}</pre>
+        </div>
+      ) : null}
+    </aside>
+  )
 }
 
 function TopNav({ title, secondaryLinkHref, secondaryLinkLabel }) {
@@ -716,17 +906,15 @@ function AppRouter() {
     return () => window.removeEventListener('hashchange', onChange)
   }, [])
 
-  if (route.page === 'topic') {
-    return <TopicDetailPage topic={route.topic} metric={route.metric} />
-  }
-  if (route.page === 'config') {
-    return <ConfigPage />
-  }
-  if (route.page === 'alerts') {
-    return <AlertsPage />
-  }
-
-  return <Dashboard />
+  return (
+    <>
+      {route.page === 'topic' ? <TopicDetailPage topic={route.topic} metric={route.metric} /> : null}
+      {route.page === 'config' ? <ConfigPage /> : null}
+      {route.page === 'alerts' ? <AlertsPage /> : null}
+      {route.page === 'dashboard' ? <Dashboard /> : null}
+      <DebugPanel />
+    </>
+  )
 }
 
 createRoot(document.getElementById('root')).render(<AppRouter />)

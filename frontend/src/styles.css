@@ -252,6 +252,62 @@ button:disabled {
   color: #475569;
 }
 
+.debug-panel {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1000;
+}
+
+.debug-toggle {
+  border-color: #f59e0b;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.debug-content {
+  width: min(90vw, 560px);
+  margin-top: 0.5rem;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.debug-enable {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.92rem;
+}
+
+.debug-note {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 0.82rem;
+}
+
+.debug-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.debug-log {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #020617;
+  color: #bfdbfe;
+  font-size: 0.74rem;
+  padding: 0.55rem;
+}
+
 @media (min-width: 720px) {
   .filter-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
