@@ -115,6 +115,68 @@ docker compose down
 
 > To also remove persisted DB data: `docker compose down -v`
 
+## Production-like smoke script
+
+Use `scripts/prod-smoke.sh` to validate the running stack the same way the UI does.
+
+### What it does
+
+1. Starts `postgres-timescaledb`, `backend`, and `frontend` with:
+
+   ```bash
+   docker compose up -d --build postgres-timescaledb backend frontend
+   ```
+2. Waits for:
+   - `http://localhost:${FRONTEND_PORT}/healthz`
+   - `http://localhost:${BACKEND_PORT}/health`
+3. Runs dependency checks:
+   - `GET /api/config/mqtt`
+   - `GET /api/dashboard?from=<iso>&to=<iso>`
+   - `GET /api/topics`
+   - optional `GET /api/timeseries?...` when at least one `topic:metric` id exists
+4. If any check fails (non-2xx or JSON parse/shape failure), it prints request details and writes diagnostics:
+   - `docker compose logs --no-color backend frontend postgres-timescaledb`
+   - `docker compose ps`
+   - failure summary
+5. Exits non-zero on failures for CI usage.
+
+### Run it
+
+```bash
+./scripts/prod-smoke.sh
+```
+
+### Expected output
+
+Pass example:
+
+```text
+Starting production-like services
+Waiting for frontend health at http://localhost:5173/healthz
+OK: frontend is healthy
+Waiting for backend health at http://localhost:8000/health
+OK: backend is healthy
+OK: GET /api/config/mqtt
+OK: GET /api/dashboard
+OK: GET /api/topics
+SKIP: GET /api/timeseries (no topics discovered)
+Smoke test passed.
+```
+
+Fail example:
+
+```text
+FAIL: GET /api/topics returned non-2xx
+  URL: http://localhost:8000/api/topics
+  Status: 500
+  Body snippet: {"detail":"..."}
+Collecting docker compose diagnostics in /workspace/mqttstat/artifacts/smoke-20260411T120000Z
+Smoke test failed with 1 check(s) failing.
+Artifacts: /workspace/mqttstat/artifacts/smoke-20260411T120000Z
+```
+
+Artifacts are written under `artifacts/smoke-<timestamp>/`.
+
 ## Optional migration/init service
 
 The backend already runs migrations on startup, but you can run migrations explicitly:
