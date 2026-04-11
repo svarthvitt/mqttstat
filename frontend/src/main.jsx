@@ -10,6 +10,7 @@ const fallbackApiBases = import.meta.env.PROD
   : [configuredApiBase, sameOriginApiBase, localDevApiBase]
 const API_BASE_CANDIDATES = [...new Set(fallbackApiBases.filter(Boolean))]
 const API_BASE_DEBUG_ENABLED = import.meta.env.DEV || import.meta.env.VITE_API_BASE_DEBUG === 'true'
+const FETCH_DEBUG_ENABLED = import.meta.env.VITE_DEBUG_FETCH === 'true'
 
 const PRESET_RANGES = [
   { label: '1h', hours: 1 },
@@ -41,8 +42,15 @@ async function fetchJson(path, params = {}, options = {}) {
       }
     })
 
+    const requestId = FETCH_DEBUG_ENABLED ? `frontend-${crypto.randomUUID()}` : null
+    const headers = new Headers(options.headers || {})
+    if (requestId) {
+      headers.set('X-Request-ID', requestId)
+      console.debug(`[fetch-debug] request url=${url.toString()} requestId=${requestId}`)
+    }
+
     try {
-      const response = await fetch(url, options)
+      const response = await fetch(url, { ...options, headers })
       if (!response.ok) {
         let message = `API request failed (${response.status})`
         try {

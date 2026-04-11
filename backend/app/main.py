@@ -3,17 +3,23 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+import logging
 from pathlib import Path
 import threading
+from time import perf_counter
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Path as PathParam, Query
+from fastapi import FastAPI, HTTPException, Path as PathParam, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp
 from pydantic import BaseModel, Field, field_validator
 
 from .config import Settings, get_settings
 from .migrations import MigrationRunner
 from .mqtt_client import MQTTIngestClient, TopicMap
 from .storage import AlertRule, MetricRepository, MqttRuntimeConfig, TopicStats
+
+request_logger = logging.getLogger("mqttstat.request")
 
 
 class TimeRange(str, Enum):
@@ -277,6 +283,48 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class RequestTracingMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
+        request_id = request.headers.get("x-request-id") or str(uuid4())
+        method = scope.get("method", "UNKNOWN")
+        path = scope.get("path", "")
+        started_at = perf_counter()
+        status_code = 500
+
+        async def send_with_request_id(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = int(message.get("status", 500))
+                headers = list(message.get("headers", []))
+                headers.append((b"x-request-id", request_id.encode("utf-8")))
+                message["headers"] = headers
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_request_id)
+        finally:
+            duration_ms = (perf_counter() - started_at) * 1000
+            request_logger.info(
+                "request completed method=%s path=%s status=%s duration_ms=%.2f request_id=%s",
+                method,
+                path,
+                status_code,
+                duration_ms,
+                request_id,
+            )
+
+
+app.add_middleware(RequestTracingMiddleware)
 
 
 def _to_utc(value: datetime) -> datetime:
