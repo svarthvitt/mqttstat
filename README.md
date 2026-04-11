@@ -57,6 +57,7 @@ cp .env.example .env
 #### Frontend API endpoint
 - `VITE_API_BASE_URL`: base URL baked into frontend build for API calls (for local Docker, `http://localhost:8000`).
 - In deployed environments, the frontend prefers same-origin API calls first so Nginx can proxy `/api/...` without cross-origin issues; `VITE_API_BASE_URL` is kept as a fallback override.
+- `VITE_DEBUG_FETCH`: when set to `true`, frontend requests include an `X-Request-ID` header and emit debug logs with URL + request ID (disabled by default).
 
 #### MQTT credentials and connectivity
 - `MQTT_BROKER_HOST`: MQTT broker host or service name reachable from backend.
@@ -114,6 +115,28 @@ docker compose down
 ```
 
 > To also remove persisted DB data: `docker compose down -v`
+
+## Troubleshooting request tracing
+
+Use this when you need to correlate a frontend request with backend request logs.
+
+1. Enable frontend fetch tracing by setting `VITE_DEBUG_FETCH=true` in your `.env`, then rebuild/restart frontend:
+
+   ```bash
+   docker compose up -d --build frontend
+   ```
+
+2. Open browser devtools and watch console logs. In debug mode, each request logs:
+   - request URL
+   - generated `X-Request-ID`
+
+3. Tail backend logs and search for the same request ID:
+
+   ```bash
+   docker compose logs -f backend
+   ```
+
+Backend logs include method, path, status, duration, and request ID for every HTTP request. If a proxy strips custom headers, backend still generates a new request ID and returns it in `X-Request-ID`, so requests remain traceable without changing API contracts.
 
 ## Production-like smoke script
 
