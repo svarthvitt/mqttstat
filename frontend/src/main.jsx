@@ -419,6 +419,7 @@ function AlertsPage() {
   const [rules, setRules] = useState({ data: [], loading: true, error: null })
   const [history, setHistory] = useState({ data: [], loading: true, error: null })
   const [form, setForm] = useState({ topic: '', metric: '', condition: 'gt', threshold: 0 })
+  const [saving, setSaving] = useState(false)
 
   const fetchRules = () => {
     fetchJson('/api/alerts/rules')
@@ -439,18 +440,25 @@ function AlertsPage() {
 
   const onSaveRule = (e) => {
     e.preventDefault()
+    setSaving(true)
     fetchJson('/api/alerts/rules', {}, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(form),
-    }).then(() => {
-      setForm({ topic: '', metric: '', condition: 'gt', threshold: 0 })
-      fetchRules()
     })
+      .then(() => {
+        setForm({ topic: '', metric: '', condition: 'gt', threshold: 0 })
+        fetchRules()
+      })
+      .finally(() => {
+        setSaving(false)
+      })
   }
 
   const onDeleteRule = (id) => {
-    fetchJson(`/api/alerts/rules/${id}`, {}, { method: 'DELETE' }).then(fetchRules)
+    if (window.confirm('Are you sure you want to delete this alert rule?')) {
+      fetchJson(`/api/alerts/rules/${id}`, {}, { method: 'DELETE' }).then(fetchRules)
+    }
   }
 
   return (
@@ -471,7 +479,9 @@ function AlertsPage() {
             </select>
           </label>
           <label>Threshold <input type="number" step="any" value={form.threshold} onChange={(e) => setForm({ ...form, threshold: Number(e.target.value) })} required /></label>
-          <button type="submit" className="save-btn">Save Rule</button>
+          <button type="submit" className="save-btn" disabled={saving}>
+            {saving ? 'Saving...' : 'Save Rule'}
+          </button>
         </form>
       </section>
 
