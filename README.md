@@ -138,6 +138,20 @@ Use this when you need to correlate a frontend request with backend request logs
 
 Backend logs include method, path, status, duration, and request ID for every HTTP request. If a proxy strips custom headers, backend still generates a new request ID and returns it in `X-Request-ID`, so requests remain traceable without changing API contracts.
 
+## Dashboard query parameters
+
+`GET /api/dashboard` supports canonical query params:
+
+- `from`: inclusive start timestamp (ISO-8601)
+- `to`: inclusive end timestamp (ISO-8601)
+
+Backward-compatibility aliases are still accepted but deprecated:
+
+- `start` (deprecated alias for `from`)
+- `end` (deprecated alias for `to`)
+
+If both forms are sent in the same request, canonical `from`/`to` take precedence and `start`/`end` are ignored.
+
 ## Production-like smoke script
 
 Use `scripts/prod-smoke.sh` to validate the running stack the same way the UI does.
