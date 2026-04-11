@@ -3,17 +3,22 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+import logging
 from pathlib import Path
 import threading
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Path as PathParam, Query
+from fastapi import FastAPI, HTTPException, Path as PathParam, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from .config import Settings, get_settings
 from .migrations import MigrationRunner
 from .mqtt_client import MQTTIngestClient, TopicMap
 from .storage import AlertRule, MetricRepository, MqttRuntimeConfig, TopicStats
+
+logger = logging.getLogger("mqttstat.api")
 
 
 class TimeRange(str, Enum):
@@ -277,6 +282,52 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _short_request_id() -> str:
+    return uuid4().hex[:12]
+
+
+def _request_context(request: Request) -> str:
+    query_items = sorted(request.query_params.multi_items())
+    return (
+        f"request_id={getattr(request.state, 'request_id', 'unknown')} "
+        f"method={request.method} path={request.url.path} query={query_items}"
+    )
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or _short_request_id()
+    request.state.request_id = request_id
+    logger.info("request_started %s", _request_context(request))
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("request_unhandled_exception %s", _request_context(request))
+        raise
+
+    response.headers["X-Request-ID"] = request_id
+    logger.info("request_completed %s status_code=%s", _request_context(request), response.status_code)
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    logger.warning(
+        "request_http_exception %s status_code=%s detail=%s",
+        _request_context(request),
+        exc.status_code,
+        exc.detail,
+    )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("request_exception %s error=%s", _request_context(request), exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 def _to_utc(value: datetime) -> datetime:

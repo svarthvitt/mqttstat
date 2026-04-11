@@ -106,6 +106,34 @@ docker compose ps
 docker compose logs -f backend frontend postgres-timescaledb
 ```
 
+## Troubleshooting request tracing
+
+Every frontend API call now sends an `X-Request-ID` header, and the backend mirrors that value back in the response header and log lines.
+
+### Find a failing request in browser logs
+
+Frontend failures include both `requestId` and `url` in the console/error message. In browser devtools, search for:
+
+- `fetchJson request failed`
+- or `requestId=<id>`
+
+### Correlate frontend and backend logs by request ID
+
+1. Capture the request ID from the frontend error (`requestId=...`).
+2. Search backend logs for the same ID:
+
+```bash
+docker compose logs backend | grep "request_id=<REQUEST_ID>"
+```
+
+3. (Optional) search frontend container logs too:
+
+```bash
+docker compose logs frontend | grep "<REQUEST_ID>"
+```
+
+Backend request/exception logs include method, path, query params, status code, and request ID to make endpoint-level failures easier to trace.
+
 ### 4) Stop stack
 
 ```bash

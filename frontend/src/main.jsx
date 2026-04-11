@@ -32,17 +32,30 @@ function buildRange(hours) {
 
 async function fetchJson(path, params = {}, options = {}) {
   let networkError = null
+  const requestId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID().split('-')[0]
+    : Math.random().toString(36).slice(2, 10)
+  let attemptedUrl = null
 
   for (const apiBase of API_BASE_CANDIDATES) {
     const url = new URL(path, apiBase)
+    attemptedUrl = url.toString()
     Object.entries(params).forEach(([key, value]) => {
       if (value !== undefined && value !== null && value !== '') {
         url.searchParams.set(key, value)
       }
     })
+    attemptedUrl = url.toString()
 
     try {
-      const response = await fetch(url, options)
+      const requestOptions = {
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          'X-Request-ID': requestId,
+        },
+      }
+      const response = await fetch(url, requestOptions)
       if (!response.ok) {
         let message = `API request failed (${response.status})`
         try {
@@ -53,15 +66,19 @@ async function fetchJson(path, params = {}, options = {}) {
         } catch {
           // no-op
         }
-        throw new Error(message)
+        throw new Error(`${message} [requestId=${requestId}] [url=${attemptedUrl}]`)
       }
       return response.json()
     } catch (error) {
+      console.error('fetchJson request failed', { requestId, url: attemptedUrl, error })
       networkError = error
     }
   }
 
-  throw networkError || new Error('API request failed')
+  if (networkError) {
+    throw networkError
+  }
+  throw new Error(`API request failed [requestId=${requestId}] [url=${attemptedUrl || path}]`)
 }
 
 function TopNav({ title, secondaryLinkHref, secondaryLinkLabel }) {
