@@ -64,18 +64,22 @@ body { margin: 0; background: #f6f7fb; }
   gap: 0.4rem;
 }
 
-input[type='datetime-local'] {
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  padding: 0.4rem 0.5rem;
-}
-
+input[type='datetime-local'],
 input[type='text'],
 input[type='number'],
-input[type='password'] {
+input[type='password'],
+select {
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   padding: 0.5rem 0.6rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
 }
 
 .preset-row {
@@ -91,6 +95,29 @@ button {
   border-radius: 999px;
   padding: 0.3rem 0.75rem;
   cursor: pointer;
+  transition: all 0.2s;
+}
+
+button:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+button:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+button:active {
+  background: #bfdbfe;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #94a3b8;
 }
 
 .stats-grid {
