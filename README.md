@@ -56,6 +56,7 @@ cp .env.example .env
 
 #### Frontend API endpoint
 - `VITE_API_BASE_URL`: base URL baked into frontend build for API calls (for local Docker, `http://localhost:8000`).
+- In deployed environments, the frontend prefers same-origin API calls first so Nginx can proxy `/api/...` without cross-origin issues; `VITE_API_BASE_URL` is kept as a fallback override.
 
 #### MQTT credentials and connectivity
 - `MQTT_BROKER_HOST`: MQTT broker host or service name reachable from backend.

@@ -3,13 +3,13 @@ import { createRoot } from 'react-dom/client'
 import './styles.css'
 
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL
-const fallbackApiBases = [
-  window.location.origin,
-  `${window.location.protocol}//${window.location.hostname}:8000`,
-]
-const API_BASE_CANDIDATES = configuredApiBase
-  ? [configuredApiBase]
-  : [...new Set(fallbackApiBases)]
+const sameOriginApiBase = window.location.origin
+const localDevApiBase = `${window.location.protocol}//${window.location.hostname}:8000`
+const fallbackApiBases = import.meta.env.PROD
+  ? [sameOriginApiBase, configuredApiBase, localDevApiBase]
+  : [configuredApiBase, sameOriginApiBase, localDevApiBase]
+const API_BASE_CANDIDATES = [...new Set(fallbackApiBases.filter(Boolean))]
+const API_BASE_DEBUG_ENABLED = import.meta.env.DEV || import.meta.env.VITE_API_BASE_DEBUG === 'true'
 
 const PRESET_RANGES = [
   { label: '1h', hours: 1 },
@@ -57,6 +57,9 @@ async function fetchJson(path, params = {}, options = {}) {
       }
       return response.json()
     } catch (error) {
+      if (API_BASE_DEBUG_ENABLED) {
+        console.debug(`[api-base] request to ${apiBase} failed for ${path}`, error)
+      }
       networkError = error
     }
   }
