@@ -85,26 +85,35 @@ class AlertHistoryRecord:
 class MetricRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
+        # Performance optimization: cache topic names to IDs to avoid redundant lookups
+        self._topic_id_cache: dict[str, int] = {}
 
     def insert(self, record: MetricRecord) -> None:
+        topic_id = self._topic_id_cache.get(record.topic)
+
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO topics (name)
-                    VALUES (%s)
-                    ON CONFLICT (name) DO NOTHING
-                    """,
-                    (record.topic,),
-                )
+                if topic_id is None:
+                    # Cache miss: ensure topic exists and get its ID
+                    cur.execute(
+                        """
+                        INSERT INTO topics (name)
+                        VALUES (%s)
+                        ON CONFLICT (name) DO NOTHING
+                        """,
+                        (record.topic,),
+                    )
 
-                cur.execute(
-                    "SELECT id FROM topics WHERE name = %s",
-                    (record.topic,),
-                )
-                topic_row = cur.fetchone()
-                if topic_row is None:
-                    raise RuntimeError(f"Failed to resolve topic_id for topic={record.topic}")
+                    cur.execute(
+                        "SELECT id FROM topics WHERE name = %s",
+                        (record.topic,),
+                    )
+                    topic_row = cur.fetchone()
+                    if topic_row is None:
+                        raise RuntimeError(f"Failed to resolve topic_id for topic={record.topic}")
+
+                    topic_id = int(topic_row[0])
+                    self._topic_id_cache[record.topic] = topic_id
 
                 cur.execute(
                     """
@@ -119,7 +128,7 @@ class MetricRepository:
                     VALUES (%s, %s, %s, %s, %s::jsonb, %s)
                     """,
                     (
-                        topic_row[0],
+                        topic_id,
                         record.metric_key,
                         record.numeric_value,
                         record.observed_at.astimezone(timezone.utc),
@@ -376,6 +385,72 @@ class MetricRepository:
                         """,
                         tuple(params),
                     )
+                first_row = cur.fetchone()
+
+        return TopicStats(
+            latest=latest_row[0] if latest_row else None,
+            minimum=aggregate_row[1] if aggregate_row else None,
+            maximum=aggregate_row[2] if aggregate_row else None,
+            average=aggregate_row[3] if aggregate_row else None,
+            count=int(aggregate_row[0] if aggregate_row else 0),
+            first_value=first_row[0] if first_row else None,
+            first_observed_at=first_row[1] if first_row else None,
+            latest_observed_at=latest_row[1] if latest_row else None,
+        )
+
+    def get_global_stats(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> TopicStats:
+        """
+        Optimized method to fetch global KPIs across all topics/metrics in a single database connection.
+        Used for the dashboard to avoid N+1 queries.
+        """
+        params = [start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
+
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                # 1. Aggregates
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS count,
+                        MIN(value) AS minimum,
+                        MAX(value) AS maximum,
+                        AVG(value)::double precision AS average
+                    FROM measurements
+                    WHERE ts >= %s AND ts <= %s
+                    """,
+                    params,
+                )
+                aggregate_row = cur.fetchone()
+
+                # 2. Latest value (global)
+                cur.execute(
+                    """
+                    SELECT value, ts
+                    FROM measurements
+                    WHERE ts >= %s AND ts <= %s
+                    ORDER BY ts DESC
+                    LIMIT 1
+                    """,
+                    params,
+                )
+                latest_row = cur.fetchone()
+
+                # 3. First value (global)
+                cur.execute(
+                    """
+                    SELECT value, ts
+                    FROM measurements
+                    WHERE ts >= %s AND ts <= %s
+                    ORDER BY ts ASC
+                    LIMIT 1
+                    """,
+                    params,
+                )
                 first_row = cur.fetchone()
 
         return TopicStats(

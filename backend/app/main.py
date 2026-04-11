@@ -359,24 +359,15 @@ def get_dashboard(
     total_measurements = sum(t.metric_count for t in topics)
 
     # Calculate global KPIs across all topics/metrics for the range
-    # This is a bit expensive but okay for a small app
-    all_stats = [
-        repository.stats(topic=t.name, start=resolved_start, end=resolved_end)
-        for t in topics
-    ]
-
-    latest_vals = [s.latest for s in all_stats if s.latest is not None]
-    min_vals = [s.minimum for s in all_stats if s.minimum is not None]
-    max_vals = [s.maximum for s in all_stats if s.maximum is not None]
-    avg_vals = [s.average for s in all_stats if s.average is not None]
-    total_count = sum(s.count for s in all_stats)
+    # Using optimized global_stats to avoid N+1 queries
+    stats = repository.get_global_stats(start=resolved_start, end=resolved_end)
 
     kpis = DashboardKPIS(
-        latest=latest_vals[0] if latest_vals else None,
-        min=min(min_vals) if min_vals else None,
-        max=max(max_vals) if max_vals else None,
-        avg=sum(avg_vals) / len(avg_vals) if avg_vals else None,
-        count=total_count,
+        latest=stats.latest,
+        min=stats.minimum,
+        max=stats.maximum,
+        avg=stats.average,
+        count=stats.count,
         trend_pct=None, # Trend across multiple topics is hard to define simply
     )
 
