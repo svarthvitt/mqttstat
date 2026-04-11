@@ -31,6 +31,10 @@ function buildRange(hours) {
   return { from: toInputValue(from), to: toInputValue(to) }
 }
 
+function buildDashboardQueryParams(range) {
+  return { from: range.from, to: range.to }
+}
+
 async function fetchJson(path, params = {}, options = {}) {
   let networkError = null
 
@@ -206,7 +210,7 @@ function Dashboard() {
   useEffect(() => {
     let cancelled = false
     setDashboard((prev) => ({ ...prev, loading: true, error: null }))
-    fetchJson('/api/dashboard', { from: range.from, to: range.to })
+    fetchJson('/api/dashboard', buildDashboardQueryParams(range))
       .then((data) => {
         if (!cancelled) {
           setDashboard({ data, loading: false, error: null })

@@ -394,13 +394,24 @@ def _to_mqtt_response(config: MqttRuntimeConfig) -> MqttConfigResponse:
 
 @app.get("/api/dashboard", response_model=DashboardResponse, tags=["dashboard"])
 def get_dashboard(
-    start: datetime | None = Query(default=None),
-    end: datetime | None = Query(default=None),
+    start: datetime | None = Query(default=None, alias="from"),
+    end: datetime | None = Query(default=None, alias="to"),
+    legacy_start: datetime | None = Query(default=None, alias="start"),
+    legacy_end: datetime | None = Query(default=None, alias="end"),
 ) -> DashboardResponse:
     repository: MetricRepository = app.state.repository
+
+    if (start is not None or end is not None) and (legacy_start is not None or legacy_end is not None):
+        request_logger.debug(
+            "dashboard request includes both canonical from/to and deprecated start/end; ignoring start/end"
+        )
+
+    effective_start = start if (start is not None or end is not None) else legacy_start
+    effective_end = end if (start is not None or end is not None) else legacy_end
+
     now = datetime.now(timezone.utc)
-    resolved_end = _to_utc(end) if end else now
-    resolved_start = _to_utc(start) if start else resolved_end - timedelta(hours=24)
+    resolved_end = _to_utc(effective_end) if effective_end else now
+    resolved_start = _to_utc(effective_start) if effective_start else resolved_end - timedelta(hours=24)
 
     # Simplified dashboard data - in a real app this would be more complex
     topics = repository.list_topics()
