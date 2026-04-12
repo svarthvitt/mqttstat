@@ -58,7 +58,8 @@ function persistDebugLogs() {
 }
 
 function addDebugLog(entry) {
-  if (!debugEnabled) return
+  // Always allow debug-mode transitions to be logged so "Disabled" is recorded
+  if (!debugEnabled && entry.type !== 'debug-mode') return
   debugLogEntries.push({ ts: new Date().toISOString(), ...entry })
   if (debugLogEntries.length > MAX_DEBUG_LOGS) {
     debugLogEntries.splice(0, debugLogEntries.length - MAX_DEBUG_LOGS)
@@ -74,6 +75,12 @@ function setDebugMode(enabled) {
   } else {
     window.localStorage.removeItem(DEBUG_STORAGE_KEY)
   }
+  addDebugLog({
+    type: 'debug-mode',
+    message: enabled ? 'Enabled debug mode' : 'Disabled debug mode',
+    location: window.location.href,
+    apiBases: API_BASE_CANDIDATES,
+  })
   notifyDebugListeners()
 }
 
@@ -156,7 +163,8 @@ async function fetchJson(path, params = {}, options = {}) {
           message,
           requestId,
         })
-        throw new Error(message)
+        networkError = new Error(message)
+        continue
       }
       addDebugLog({
         type: 'response-ok',
@@ -202,14 +210,7 @@ function DebugPanel() {
   }), [])
 
   const onToggleDebug = (event) => {
-    const nextEnabled = event.target.checked
-    setDebugMode(nextEnabled)
-    addDebugLog({
-      type: 'debug-mode',
-      message: nextEnabled ? 'Enabled debug mode' : 'Disabled debug mode',
-      location: window.location.href,
-      apiBases: API_BASE_CANDIDATES,
-    })
+    setDebugMode(event.target.checked)
   }
 
   const onCopyLogs = async () => {
