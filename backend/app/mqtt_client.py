@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import operator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,14 @@ import yaml
 from .storage import MetricRecord, MetricRepository
 
 logger = logging.getLogger(__name__)
+
+_CONDITION_MAP = {
+    "gt": operator.gt,
+    "lt": operator.lt,
+    "eq": operator.eq,
+    "gte": operator.ge,
+    "lte": operator.le,
+}
 
 
 @dataclass(frozen=True)
@@ -188,19 +197,8 @@ class MQTTIngestClient:
         try:
             for rule in self._alert_rules_cache:
                 if rule.topic == topic and rule.metric == metric_key:
-                    triggered = False
-                    if rule.condition == "gt" and value > rule.threshold:
-                        triggered = True
-                    elif rule.condition == "lt" and value < rule.threshold:
-                        triggered = True
-                    elif rule.condition == "eq" and value == rule.threshold:
-                        triggered = True
-                    elif rule.condition == "gte" and value >= rule.threshold:
-                        triggered = True
-                    elif rule.condition == "lte" and value <= rule.threshold:
-                        triggered = True
-
-                    if triggered:
+                    op = _CONDITION_MAP.get(rule.condition)
+                    if op and op(value, rule.threshold):
                         logger.warning("Alert triggered! Topic: %s, Metric: %s, Value: %s %s %s",
                                        topic, metric_key, value, rule.condition, rule.threshold)
                         self._repository.insert_alert_history(rule.id, value)
