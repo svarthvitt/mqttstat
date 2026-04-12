@@ -284,11 +284,11 @@ function TopNav({ title, secondaryLinkHref, secondaryLinkLabel }) {
 }
 
 function LoadingState({ label }) {
-  return <div className="state">Loading {label}…</div>
+  return <div className="state" role="status" aria-live="polite">Loading {label}…</div>
 }
 
 function ErrorState({ message }) {
-  return <div className="state error">{message}</div>
+  return <div className="state error" role="alert">{message}</div>
 }
 
 function EmptyState({ label }) {
@@ -526,7 +526,12 @@ function Dashboard() {
                     }}
                   />
                   <span>{topic.topic} / {topic.metric}</span>
-                  <a href={`#/topics/${encodeURIComponent(topic.topic)}?metric=${encodeURIComponent(topic.metric)}`}>Details</a>
+                  <a
+                    href={`#/topics/${encodeURIComponent(topic.topic)}?metric=${encodeURIComponent(topic.metric)}`}
+                    aria-label={`View details for ${topic.topic} ${topic.metric}`}
+                  >
+                    Details
+                  </a>
                 </label>
               ))}
             </div>
@@ -625,6 +630,7 @@ function AlertsPage() {
   const [history, setHistory] = useState({ data: [], loading: true, error: null })
   const [form, setForm] = useState({ topic: '', metric: '', condition: 'gt', threshold: 0 })
   const [saving, setSaving] = useState(false)
+  const [saveSuccess, setSaveSuccess] = useState(false)
 
   const fetchRules = () => {
     fetchJson('/api/alerts/rules')
@@ -646,6 +652,7 @@ function AlertsPage() {
   const onSaveRule = (e) => {
     e.preventDefault()
     setSaving(true)
+    setSaveSuccess(false)
     fetchJson('/api/alerts/rules', {}, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -653,6 +660,7 @@ function AlertsPage() {
     })
       .then(() => {
         setForm({ topic: '', metric: '', condition: 'gt', threshold: 0 })
+        setSaveSuccess(true)
         fetchRules()
       })
       .finally(() => {
@@ -672,10 +680,10 @@ function AlertsPage() {
       <section className="panel">
         <h2>Create Alert Rule</h2>
         <form className="config-form" onSubmit={onSaveRule}>
-          <label>Topic <input type="text" value={form.topic} onChange={(e) => setForm({ ...form, topic: e.target.value })} required /></label>
-          <label>Metric <input type="text" value={form.metric} onChange={(e) => setForm({ ...form, metric: e.target.value })} required /></label>
+          <label>Topic <input type="text" value={form.topic} onChange={(e) => { setForm({ ...form, topic: e.target.value }); setSaveSuccess(false) }} required /></label>
+          <label>Metric <input type="text" value={form.metric} onChange={(e) => { setForm({ ...form, metric: e.target.value }); setSaveSuccess(false) }} required /></label>
           <label>Condition
-            <select value={form.condition} onChange={(e) => setForm({ ...form, condition: e.target.value })}>
+            <select value={form.condition} onChange={(e) => { setForm({ ...form, condition: e.target.value }); setSaveSuccess(false) }}>
               <option value="gt">&gt;</option>
               <option value="lt">&lt;</option>
               <option value="eq">=</option>
@@ -683,10 +691,11 @@ function AlertsPage() {
               <option value="lte">&le;</option>
             </select>
           </label>
-          <label>Threshold <input type="number" step="any" value={form.threshold} onChange={(e) => setForm({ ...form, threshold: Number(e.target.value) })} required /></label>
+          <label>Threshold <input type="number" step="any" value={form.threshold} onChange={(e) => { setForm({ ...form, threshold: Number(e.target.value) }); setSaveSuccess(false) }} required /></label>
           <button type="submit" className="save-btn" disabled={saving}>
             {saving ? 'Saving...' : 'Save Rule'}
           </button>
+          {saveSuccess ? <div className="state success" role="status" aria-live="polite">Rule saved successfully!</div> : null}
         </form>
       </section>
 
@@ -701,7 +710,14 @@ function AlertsPage() {
             {rules.data.map((rule) => (
               <tr key={rule.id}>
                 <td>{rule.topic}</td><td>{rule.metric}</td><td>{rule.condition}</td><td>{rule.threshold}</td>
-                <td><button onClick={() => onDeleteRule(rule.id)}>Delete</button></td>
+                <td>
+                  <button
+                    onClick={() => onDeleteRule(rule.id)}
+                    aria-label={`Delete alert rule for ${rule.topic} ${rule.metric}`}
+                  >
+                    Delete
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
