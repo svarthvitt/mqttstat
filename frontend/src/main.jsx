@@ -844,8 +844,7 @@ function ConfigPage() {
           </div>
         ) : null}
 
-        {(!loadState.loading) ? (
-          <form className="config-form" onSubmit={onSubmit}>
+        <form className="config-form" onSubmit={onSubmit}>
             <label>
               Broker host
               <input type="text" value={form.mqtt_host} onChange={onChange('mqtt_host')} required />
@@ -868,15 +867,14 @@ function ConfigPage() {
             </label>
 
             <div className="button-group" style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
-              <button type="submit" className="save-btn" disabled={saveState.saving}>
+              <button type="submit" className="save-btn" disabled={saveState.saving || loadState.loading}>
                 {saveState.saving ? 'Saving…' : 'Save config'}
               </button>
-              <button type="button" className="test-btn" onClick={onTest} disabled={testState.testing}>
+              <button type="button" className="test-btn" onClick={onTest} disabled={testState.testing || loadState.loading}>
                 {testState.testing ? 'Testing…' : 'Test connection'}
               </button>
             </div>
           </form>
-        ) : null}
 
         {saveState.success ? <div className="state success" style={{ marginTop: '1rem' }}>{saveState.success}</div> : null}
         {saveState.error ? <ErrorState message={saveState.error} /> : null}
