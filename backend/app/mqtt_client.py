@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import operator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import paho.mqtt.client as mqtt
 import yaml
@@ -185,22 +186,18 @@ class MQTTIngestClient:
             logger.exception("Failed to reload alert rules cache")
 
     def _check_alerts(self, topic: str, metric_key: str, value: float) -> None:
+        ops: dict[str, Callable[[Any, Any], bool]] = {
+            "gt": operator.gt,
+            "lt": operator.lt,
+            "eq": operator.eq,
+            "gte": operator.ge,
+            "lte": operator.le,
+        }
         try:
             for rule in self._alert_rules_cache:
                 if rule.topic == topic and rule.metric == metric_key:
-                    triggered = False
-                    if rule.condition == "gt" and value > rule.threshold:
-                        triggered = True
-                    elif rule.condition == "lt" and value < rule.threshold:
-                        triggered = True
-                    elif rule.condition == "eq" and value == rule.threshold:
-                        triggered = True
-                    elif rule.condition == "gte" and value >= rule.threshold:
-                        triggered = True
-                    elif rule.condition == "lte" and value <= rule.threshold:
-                        triggered = True
-
-                    if triggered:
+                    op_func = ops.get(rule.condition)
+                    if op_func and op_func(value, rule.threshold):
                         logger.warning("Alert triggered! Topic: %s, Metric: %s, Value: %s %s %s",
                                        topic, metric_key, value, rule.condition, rule.threshold)
                         self._repository.insert_alert_history(rule.id, value)

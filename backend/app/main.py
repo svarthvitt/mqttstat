@@ -278,10 +278,11 @@ app = FastAPI(title="mqttstat API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex="https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["x-request-id"],
 )
 
 
@@ -591,6 +592,61 @@ def list_topics() -> TopicListResponse:
 
 
 @app.get(
+    "/api/topics/{topic}",
+    summary="Combined topic timeseries and statistics",
+    tags=["topics"],
+)
+def get_topic_details(
+    topic: str = PathParam(description="MQTT topic name."),
+    start: datetime | None = Query(default=None, alias="from"),
+    end: datetime | None = Query(default=None, alias="to"),
+    metric: str | None = Query(default=None, description="Optional metric key filter."),
+) -> dict:
+    repository: MetricRepository = app.state.repository
+    if not repository.topic_exists(topic):
+        raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
+
+    resolved_start, resolved_end = _resolve_time_window(range_name=TimeRange.twenty_four_hours, start=start, end=end)
+
+    records, _ = repository.history(
+        topic=topic,
+        start=resolved_start,
+        end=resolved_end,
+        metric=metric,
+        limit=500,
+        offset=0,
+    )
+
+    points = [TimeseriesPoint(ts=r.observed_at, value=r.value) for r in reversed(records)]
+
+    series = TimeseriesEntry(
+        id=f"{topic}:{metric or 'all'}",
+        label=f"{topic} / {metric or 'all'}",
+        color="#3b82f6",
+        points=points,
+    )
+
+    stats = repository.stats(
+        topic=topic,
+        start=resolved_start,
+        end=resolved_end,
+        metric=metric,
+    )
+    trend = _trend_from_stats(stats)
+
+    summary = {
+        "latest": stats.latest,
+        "min": stats.minimum,
+        "max": stats.maximum,
+        "avg": stats.average,
+        "count": stats.count,
+        "trend_pct": trend.delta_percent,
+    }
+
+    return {"series": series, "summary": summary}
+
+
+@app.get(
     "/api/topics/{topic}/history",
     response_model=HistoryResponse,
     summary="Topic measurement history",
@@ -605,7 +661,7 @@ def topic_history(
     limit: int = Query(default=100, ge=1, le=1000, description="Maximum number of records to return."),
     offset: int = Query(default=0, ge=0, description="Pagination offset."),
 ) -> HistoryResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 
@@ -652,7 +708,7 @@ def topic_stats(
     end: datetime | None = Query(default=None, description="Optional end timestamp (ISO-8601)."),
     metric: str | None = Query(default=None, description="Optional metric key filter."),
 ) -> StatsResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 

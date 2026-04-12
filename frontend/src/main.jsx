@@ -285,15 +285,15 @@ function TopNav({ title, secondaryLinkHref, secondaryLinkLabel }) {
 }
 
 function LoadingState({ label }) {
-  return <div className="state">Loading {label}…</div>
+  return <div className="state" role="status" aria-live="polite">Loading {label}…</div>
 }
 
 function ErrorState({ message }) {
-  return <div className="state error">{message}</div>
+  return <div className="state error" role="alert" aria-live="assertive">{message}</div>
 }
 
 function EmptyState({ label }) {
-  return <div className="state">No {label} available for this range.</div>
+  return <div className="state" role="status" aria-live="polite">No {label} available for this range.</div>
 }
 
 function StatCard({ title, value, hint }) {
