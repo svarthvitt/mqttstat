@@ -173,6 +173,9 @@ async function fetchJson(path, params = {}, options = {}) {
         url: url.toString(),
         requestId,
       })
+      if (response.status === 204) {
+        return null
+      }
       return response.json()
     } catch (error) {
       if (API_BASE_DEBUG_ENABLED) {
@@ -656,6 +659,9 @@ function AlertsPage() {
         setForm({ topic: '', metric: '', condition: 'gt', threshold: 0 })
         fetchRules()
       })
+      .catch((error) => {
+        window.alert(`Failed to save alert rule: ${error.message}`)
+      })
       .finally(() => {
         setSaving(false)
       })
@@ -663,7 +669,11 @@ function AlertsPage() {
 
   const onDeleteRule = (id) => {
     if (window.confirm('Are you sure you want to delete this alert rule?')) {
-      fetchJson(`/api/alerts/rules/${id}`, {}, { method: 'DELETE' }).then(fetchRules)
+      fetchJson(`/api/alerts/rules/${id}`, {}, { method: 'DELETE' })
+        .then(fetchRules)
+        .catch((error) => {
+          window.alert(`Failed to delete alert rule: ${error.message}`)
+        })
     }
   }
 
