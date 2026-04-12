@@ -278,7 +278,8 @@ app = FastAPI(title="mqttstat API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex="https?://.*",
+    # Allow local development and private network origins while supporting credentials
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\..*|10\..*|172\.(1[6-9]|2[0-9]|3[0-1])\..*)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
