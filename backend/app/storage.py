@@ -88,54 +88,67 @@ class MetricRepository:
         # Performance optimization: cache topic names to IDs to avoid redundant lookups
         self._topic_id_cache: dict[str, int] = {}
 
+    def _get_topic_id(self, cur: psycopg.Cursor, topic: str) -> int:
+        """Helper to resolve topic_id with in-memory cache and DB fallback."""
+        topic_id = self._topic_id_cache.get(topic)
+        if topic_id is not None:
+            return topic_id
+
+        # Cache miss: ensure topic exists and get its ID
+        cur.execute(
+            """
+            INSERT INTO topics (name)
+            VALUES (%s)
+            ON CONFLICT (name) DO NOTHING
+            """,
+            (topic,),
+        )
+
+        cur.execute(
+            "SELECT id FROM topics WHERE name = %s",
+            (topic,),
+        )
+        topic_row = cur.fetchone()
+        if topic_row is None:
+            raise RuntimeError(f"Failed to resolve topic_id for topic={topic}")
+
+        topic_id = int(topic_row[0])
+        self._topic_id_cache[topic] = topic_id
+        return topic_id
+
     def insert(self, record: MetricRecord) -> None:
-        topic_id = self._topic_id_cache.get(record.topic)
+        self.insert_batch([record])
+
+    def insert_batch(self, records: list[MetricRecord]) -> None:
+        if not records:
+            return
 
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
-                if topic_id is None:
-                    # Cache miss: ensure topic exists and get its ID
+                for record in records:
+                    topic_id = self._get_topic_id(cur, record.topic)
+
                     cur.execute(
                         """
-                        INSERT INTO topics (name)
-                        VALUES (%s)
-                        ON CONFLICT (name) DO NOTHING
+                        INSERT INTO measurements (
+                            topic_id,
+                            metric,
+                            value,
+                            ts,
+                            payload_json,
+                            raw_payload
+                        )
+                        VALUES (%s, %s, %s, %s, %s::jsonb, %s)
                         """,
-                        (record.topic,),
+                        (
+                            topic_id,
+                            record.metric_key,
+                            record.numeric_value,
+                            record.observed_at.astimezone(timezone.utc),
+                            json.dumps(record.payload_json) if record.payload_json is not None else None,
+                            record.raw_payload,
+                        ),
                     )
-
-                    cur.execute(
-                        "SELECT id FROM topics WHERE name = %s",
-                        (record.topic,),
-                    )
-                    topic_row = cur.fetchone()
-                    if topic_row is None:
-                        raise RuntimeError(f"Failed to resolve topic_id for topic={record.topic}")
-
-                    topic_id = int(topic_row[0])
-                    self._topic_id_cache[record.topic] = topic_id
-
-                cur.execute(
-                    """
-                    INSERT INTO measurements (
-                        topic_id,
-                        metric,
-                        value,
-                        ts,
-                        payload_json,
-                        raw_payload
-                    )
-                    VALUES (%s, %s, %s, %s, %s::jsonb, %s)
-                    """,
-                    (
-                        topic_id,
-                        record.metric_key,
-                        record.numeric_value,
-                        record.observed_at.astimezone(timezone.utc),
-                        json.dumps(record.payload_json) if record.payload_json is not None else None,
-                        record.raw_payload,
-                    ),
-                )
             conn.commit()
 
     def list_topics(self) -> list[TopicSummary]:

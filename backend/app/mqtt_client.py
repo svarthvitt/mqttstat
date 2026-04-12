@@ -101,7 +101,8 @@ class MQTTIngestClient:
     ) -> None:
         self._topic_map = topic_map
         self._repository = repository
-        self._alert_rules_cache: list[Any] = []
+        # Cache alert rules by (topic, metric) for O(1) lookup
+        self._alert_rules_cache: dict[tuple[str, str], list[AlertRule]] = {}
 
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
         if username:
@@ -147,11 +148,12 @@ class MQTTIngestClient:
 
     def _handle_json(self, topic: str, raw_payload: str, observed_at: datetime, mapping: TopicMapping) -> None:
         payload = json.loads(raw_payload)
+        records = []
 
         for field_mapping in mapping.json_fields:
             value = _extract_path(payload, field_mapping.field)
             numeric_value = float(value)
-            self._repository.insert(
+            records.append(
                 MetricRecord(
                     topic=topic,
                     metric_key=field_mapping.metric_key,
@@ -161,7 +163,13 @@ class MQTTIngestClient:
                     payload_json=payload,
                 )
             )
-            self._check_alerts(topic, field_mapping.metric_key, numeric_value)
+
+        # Batch insert all metrics from the JSON payload in one transaction
+        self._repository.insert_batch(records)
+
+        # Check alerts for each metric
+        for record in records:
+            self._check_alerts(record.topic, record.metric_key, record.numeric_value)
 
     def _handle_raw_numeric(self, topic: str, raw_payload: str, observed_at: datetime, mapping: TopicMapping) -> None:
         numeric_value = float(raw_payload.strip())
@@ -179,31 +187,38 @@ class MQTTIngestClient:
 
     def reload_rules(self) -> None:
         try:
-            self._alert_rules_cache = self._repository.get_active_alert_rules()
-            logger.info("Alert rules cache reloaded: %d rules active", len(self._alert_rules_cache))
+            rules = self._repository.get_active_alert_rules()
+            new_cache: dict[tuple[str, str], list[AlertRule]] = {}
+            for rule in rules:
+                key = (rule.topic, rule.metric)
+                if key not in new_cache:
+                    new_cache[key] = []
+                new_cache[key].append(rule)
+            self._alert_rules_cache = new_cache
+            logger.info("Alert rules cache reloaded: %d rules active", len(rules))
         except Exception:
             logger.exception("Failed to reload alert rules cache")
 
     def _check_alerts(self, topic: str, metric_key: str, value: float) -> None:
         try:
-            for rule in self._alert_rules_cache:
-                if rule.topic == topic and rule.metric == metric_key:
-                    triggered = False
-                    if rule.condition == "gt" and value > rule.threshold:
-                        triggered = True
-                    elif rule.condition == "lt" and value < rule.threshold:
-                        triggered = True
-                    elif rule.condition == "eq" and value == rule.threshold:
-                        triggered = True
-                    elif rule.condition == "gte" and value >= rule.threshold:
-                        triggered = True
-                    elif rule.condition == "lte" and value <= rule.threshold:
-                        triggered = True
+            rules = self._alert_rules_cache.get((topic, metric_key), [])
+            for rule in rules:
+                triggered = False
+                if rule.condition == "gt" and value > rule.threshold:
+                    triggered = True
+                elif rule.condition == "lt" and value < rule.threshold:
+                    triggered = True
+                elif rule.condition == "eq" and value == rule.threshold:
+                    triggered = True
+                elif rule.condition == "gte" and value >= rule.threshold:
+                    triggered = True
+                elif rule.condition == "lte" and value <= rule.threshold:
+                    triggered = True
 
-                    if triggered:
-                        logger.warning("Alert triggered! Topic: %s, Metric: %s, Value: %s %s %s",
-                                       topic, metric_key, value, rule.condition, rule.threshold)
-                        self._repository.insert_alert_history(rule.id, value)
+                if triggered:
+                    logger.warning("Alert triggered! Topic: %s, Metric: %s, Value: %s %s %s",
+                                   topic, metric_key, value, rule.condition, rule.threshold)
+                    self._repository.insert_alert_history(rule.id, value)
         except Exception:
             logger.exception("Failed to check alerts for topic=%s metric=%s", topic, metric_key)
 
