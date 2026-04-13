@@ -605,7 +605,7 @@ def topic_history(
     limit: int = Query(default=100, ge=1, le=1000, description="Maximum number of records to return."),
     offset: int = Query(default=0, ge=0, description="Pagination offset."),
 ) -> HistoryResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 
@@ -652,7 +652,7 @@ def topic_stats(
     end: datetime | None = Query(default=None, description="Optional end timestamp (ISO-8601)."),
     metric: str | None = Query(default=None, description="Optional metric key filter."),
 ) -> StatsResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 

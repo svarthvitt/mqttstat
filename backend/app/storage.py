@@ -89,33 +89,46 @@ class MetricRepository:
         self._topic_id_cache: dict[str, int] = {}
 
     def insert(self, record: MetricRecord) -> None:
-        topic_id = self._topic_id_cache.get(record.topic)
+        """Insert a single metric record. For high-frequency ingestion, use insert_batch."""
+        self.insert_batch([record])
+
+    def insert_batch(self, records: list[MetricRecord]) -> None:
+        """
+        Efficiently insert multiple metric records in a single database connection and transaction.
+        Reduces connection overhead and improves throughput for multi-metric messages.
+        """
+        if not records:
+            return
 
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
-                if topic_id is None:
-                    # Cache miss: ensure topic exists and get its ID
-                    cur.execute(
-                        """
-                        INSERT INTO topics (name)
-                        VALUES (%s)
-                        ON CONFLICT (name) DO NOTHING
-                        """,
-                        (record.topic,),
-                    )
+                measurement_data = []
+                for record in records:
+                    topic_id = self._topic_id_cache.get(record.topic)
+                    if topic_id is None:
+                        # Cache miss: ensure topic exists and get its ID
+                        cur.execute(
+                            "INSERT INTO topics (name) VALUES (%s) ON CONFLICT (name) DO NOTHING",
+                            (record.topic,),
+                        )
+                        cur.execute("SELECT id FROM topics WHERE name = %s", (record.topic,))
+                        topic_row = cur.fetchone()
+                        if topic_row is None:
+                            raise RuntimeError(f"Failed to resolve topic_id for topic={record.topic}")
 
-                    cur.execute(
-                        "SELECT id FROM topics WHERE name = %s",
-                        (record.topic,),
-                    )
-                    topic_row = cur.fetchone()
-                    if topic_row is None:
-                        raise RuntimeError(f"Failed to resolve topic_id for topic={record.topic}")
+                        topic_id = int(topic_row[0])
+                        self._topic_id_cache[record.topic] = topic_id
 
-                    topic_id = int(topic_row[0])
-                    self._topic_id_cache[record.topic] = topic_id
+                    measurement_data.append((
+                        topic_id,
+                        record.metric_key,
+                        record.numeric_value,
+                        record.observed_at.astimezone(timezone.utc),
+                        json.dumps(record.payload_json) if record.payload_json is not None else None,
+                        record.raw_payload,
+                    ))
 
-                cur.execute(
+                cur.executemany(
                     """
                     INSERT INTO measurements (
                         topic_id,
@@ -127,14 +140,7 @@ class MetricRepository:
                     )
                     VALUES (%s, %s, %s, %s, %s::jsonb, %s)
                     """,
-                    (
-                        topic_id,
-                        record.metric_key,
-                        record.numeric_value,
-                        record.observed_at.astimezone(timezone.utc),
-                        json.dumps(record.payload_json) if record.payload_json is not None else None,
-                        record.raw_payload,
-                    ),
+                    measurement_data,
                 )
             conn.commit()
 
