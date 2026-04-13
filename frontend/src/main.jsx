@@ -288,11 +288,11 @@ function TopNav({ title, secondaryLinkHref, secondaryLinkLabel }) {
 }
 
 function LoadingState({ label }) {
-  return <div className="state">Loading {label}…</div>
+  return <div className="state" role="status" aria-live="polite">Loading {label}…</div>
 }
 
 function ErrorState({ message }) {
-  return <div className="state error">{message}</div>
+  return <div className="state error" role="alert">Error: {message}</div>
 }
 
 function EmptyState({ label }) {
@@ -629,6 +629,7 @@ function AlertsPage() {
   const [history, setHistory] = useState({ data: [], loading: true, error: null })
   const [form, setForm] = useState({ topic: '', metric: '', condition: 'gt', threshold: 0 })
   const [saving, setSaving] = useState(false)
+  const [deletingId, setDeletingId] = useState(null)
 
   const fetchRules = () => {
     fetchJson('/api/alerts/rules')
@@ -669,10 +670,14 @@ function AlertsPage() {
 
   const onDeleteRule = (id) => {
     if (window.confirm('Are you sure you want to delete this alert rule?')) {
+      setDeletingId(id)
       fetchJson(`/api/alerts/rules/${id}`, {}, { method: 'DELETE' })
         .then(fetchRules)
         .catch((error) => {
           window.alert(`Failed to delete alert rule: ${error.message}`)
+        })
+        .finally(() => {
+          setDeletingId(null)
         })
     }
   }
@@ -712,7 +717,15 @@ function AlertsPage() {
             {rules.data.map((rule) => (
               <tr key={rule.id}>
                 <td>{rule.topic}</td><td>{rule.metric}</td><td>{rule.condition}</td><td>{rule.threshold}</td>
-                <td><button onClick={() => onDeleteRule(rule.id)}>Delete</button></td>
+                <td>
+                  <button
+                    onClick={() => onDeleteRule(rule.id)}
+                    disabled={deletingId === rule.id}
+                    aria-label={`Delete alert rule for ${rule.topic} / ${rule.metric}`}
+                  >
+                    {deletingId === rule.id ? 'Deleting...' : 'Delete'}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -876,10 +889,10 @@ function ConfigPage() {
             </div>
           </form>
 
-        {saveState.success ? <div className="state success" style={{ marginTop: '1rem' }}>{saveState.success}</div> : null}
+        {saveState.success ? <div className="state success" role="status" aria-live="polite" style={{ marginTop: '1rem' }}>{saveState.success}</div> : null}
         {saveState.error ? <ErrorState message={saveState.error} /> : null}
 
-        {testState.success ? <div className="state success" style={{ marginTop: '1rem' }}>{testState.success}</div> : null}
+        {testState.success ? <div className="state success" role="status" aria-live="polite" style={{ marginTop: '1rem' }}>{testState.success}</div> : null}
         {testState.error ? <div style={{ marginTop: '1rem' }}><ErrorState message={testState.error} /></div> : null}
       </section>
     </div>
