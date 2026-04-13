@@ -153,6 +153,12 @@ class MqttConfigTestResponse(BaseModel):
     detail: str
 
 
+class MqttServiceStatusResponse(BaseModel):
+    connected: bool
+    last_error: str | None = None
+    last_attempt_at: datetime | None = None
+
+
 class AlertRuleRequest(BaseModel):
     id: int | None = None
     topic: str = Field(min_length=1)
@@ -189,16 +195,32 @@ class MQTTClientService:
         self._lock = threading.Lock()
         self._active_config = settings
         self._client: MQTTIngestClient | None = None
+        self._connected = False
+        self._last_error: str | None = None
+        self._last_attempt_at: datetime | None = None
 
     @property
     def active_config(self) -> Settings:
         return self._active_config
 
+    def status(self) -> MqttServiceStatusResponse:
+        with self._lock:
+            return MqttServiceStatusResponse(
+                connected=self._connected,
+                last_error=self._last_error,
+                last_attempt_at=self._last_attempt_at,
+            )
+
+    def _set_attempt_state(self, *, connected: bool, error: str | None = None) -> None:
+        self._connected = connected
+        self._last_error = error
+        self._last_attempt_at = datetime.now(timezone.utc)
+
     def start(self) -> None:
         with self._lock:
             if self._client is not None:
                 return
-            self._client = MQTTIngestClient(
+            candidate_client = MQTTIngestClient(
                 host=self._active_config.mqtt_host,
                 port=self._active_config.mqtt_port,
                 username=self._active_config.mqtt_username,
@@ -207,7 +229,18 @@ class MQTTClientService:
                 topic_map=self._topic_map,
                 repository=self._repository,
             )
-            self._client.start()
+            try:
+                candidate_client.start()
+            except Exception as exc:
+                self._set_attempt_state(connected=False, error=str(exc))
+                try:
+                    candidate_client.stop()
+                except Exception:
+                    request_logger.debug("mqtt startup cleanup failed", exc_info=True)
+                self._client = None
+                return
+            self._client = candidate_client
+            self._set_attempt_state(connected=True, error=None)
 
     def reload_alerts(self) -> None:
         with self._lock:
@@ -220,13 +253,14 @@ class MQTTClientService:
                 return
             self._client.stop()
             self._client = None
+            self._connected = False
 
     def reload(self, settings: Settings) -> None:
         with self._lock:
             if self._client is not None:
                 self._client.stop()
             self._active_config = settings
-            self._client = MQTTIngestClient(
+            candidate_client = MQTTIngestClient(
                 host=self._active_config.mqtt_host,
                 port=self._active_config.mqtt_port,
                 username=self._active_config.mqtt_username,
@@ -235,7 +269,18 @@ class MQTTClientService:
                 topic_map=self._topic_map,
                 repository=self._repository,
             )
-            self._client.start()
+            try:
+                candidate_client.start()
+            except Exception as exc:
+                self._set_attempt_state(connected=False, error=str(exc))
+                try:
+                    candidate_client.stop()
+                except Exception:
+                    request_logger.debug("mqtt reload cleanup failed", exc_info=True)
+                self._client = None
+                return
+            self._client = candidate_client
+            self._set_attempt_state(connected=True, error=None)
 
 
 def _runtime_config_or_defaults(repository: MetricRepository, defaults: Settings) -> Settings:
@@ -263,6 +308,12 @@ async def lifespan(app: FastAPI):
     topic_map = TopicMap.from_file(effective_settings.mqtt_topic_map_path)
     mqtt_service = MQTTClientService(repository=repository, topic_map=topic_map, settings=effective_settings)
     mqtt_service.start()
+    mqtt_status = mqtt_service.status()
+    if not mqtt_status.connected:
+        request_logger.warning(
+            "MQTT startup failed; running in degraded mode. error=%s",
+            mqtt_status.last_error or "unknown_error",
+        )
 
     app.state.repository = repository
     app.state.settings = settings
@@ -551,6 +602,12 @@ def put_mqtt_config(payload: MqttConfigUpdateRequest) -> MqttConfigResponse:
     )
 
     return _to_mqtt_response(persisted)
+
+
+@app.get("/api/config/mqtt/status", response_model=MqttServiceStatusResponse, tags=["config"])
+def get_mqtt_status() -> MqttServiceStatusResponse:
+    mqtt_service: MQTTClientService = app.state.mqtt_service
+    return mqtt_service.status()
 
 
 @app.post("/api/config/mqtt/test", response_model=MqttConfigTestResponse, tags=["config"])
