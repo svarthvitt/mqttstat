@@ -333,6 +333,14 @@ def _to_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+_TIME_RANGE_DELTAS = {
+    TimeRange.one_hour: timedelta(hours=1),
+    TimeRange.twenty_four_hours: timedelta(hours=24),
+    TimeRange.seven_days: timedelta(days=7),
+    TimeRange.thirty_days: timedelta(days=30),
+}
+
+
 def _resolve_time_window(
     range_name: TimeRange,
     start: datetime | None,
@@ -341,21 +349,17 @@ def _resolve_time_window(
     now = datetime.now(timezone.utc)
     resolved_end = _to_utc(end) if end else now
 
-    if range_name == TimeRange.custom:
-        if start is None or end is None:
-            raise HTTPException(
-                status_code=422,
-                detail="Custom range requires both start and end timestamps.",
-            )
+    if range_name == TimeRange.custom and (start is None or end is None):
+        raise HTTPException(
+            status_code=422,
+            detail="Custom range requires both start and end timestamps.",
+        )
+
+    if start:
         resolved_start = _to_utc(start)
-    elif range_name == TimeRange.one_hour:
-        resolved_start = _to_utc(start) if start else resolved_end - timedelta(hours=1)
-    elif range_name == TimeRange.twenty_four_hours:
-        resolved_start = _to_utc(start) if start else resolved_end - timedelta(hours=24)
-    elif range_name == TimeRange.seven_days:
-        resolved_start = _to_utc(start) if start else resolved_end - timedelta(days=7)
     else:
-        resolved_start = _to_utc(start) if start else resolved_end - timedelta(days=30)
+        delta = _TIME_RANGE_DELTAS.get(range_name, timedelta(days=30))
+        resolved_start = resolved_end - delta
 
     if resolved_end < resolved_start:
         raise HTTPException(status_code=422, detail="end must be greater than or equal to start.")
