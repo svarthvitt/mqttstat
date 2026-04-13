@@ -23,6 +23,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      no_cache: true
+      pull: true
     container_name: mqttstat-migrate
     profiles: ["ops"]
     restart: "no"
@@ -58,6 +60,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      no_cache: true
+      pull: true
     container_name: mqttstat-backend
     restart: unless-stopped
     env_file:
@@ -80,6 +84,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      no_cache: true
+      pull: true
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
     container_name: mqttstat-frontend
