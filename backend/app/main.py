@@ -115,6 +115,11 @@ class TimeseriesResponse(BaseModel):
     series: list[TimeseriesEntry]
 
 
+class TopicDetailResponse(BaseModel):
+    series: TimeseriesEntry
+    summary: StatsResponse
+
+
 class MqttConfigUpdateRequest(BaseModel):
     mqtt_host: str = Field(min_length=1, max_length=255)
     mqtt_port: int = Field(ge=1, le=65535)
@@ -658,6 +663,7 @@ def list_topics() -> TopicListResponse:
     tags=["topics"],
 )
 def topic_history(
+    request: Request,
     topic: str = PathParam(description="MQTT topic name."),
     range_name: TimeRange = Query(default=TimeRange.twenty_four_hours, alias="range"),
     start: datetime | None = Query(default=None, description="Optional start timestamp (ISO-8601)."),
@@ -666,7 +672,7 @@ def topic_history(
     limit: int = Query(default=100, ge=1, le=1000, description="Maximum number of records to return."),
     offset: int = Query(default=0, ge=0, description="Pagination offset."),
 ) -> HistoryResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = request.app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 
@@ -707,13 +713,14 @@ def topic_history(
     tags=["topics"],
 )
 def topic_stats(
+    request: Request,
     topic: str = PathParam(description="MQTT topic name."),
     range_name: TimeRange = Query(default=TimeRange.twenty_four_hours, alias="range"),
     start: datetime | None = Query(default=None, description="Optional start timestamp (ISO-8601)."),
     end: datetime | None = Query(default=None, description="Optional end timestamp (ISO-8601)."),
     metric: str | None = Query(default=None, description="Optional metric key filter."),
 ) -> StatsResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = request.app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 
@@ -739,6 +746,73 @@ def topic_stats(
         count=stats.count,
         trend=trend,
     )
+
+
+@app.get(
+    "/api/topics/{topic}",
+    response_model=TopicDetailResponse,
+    summary="Combined topic history and stats",
+    tags=["topics"],
+)
+def get_topic_detail(
+    request: Request,
+    topic: str = PathParam(description="MQTT topic name."),
+    range_name: TimeRange = Query(default=TimeRange.twenty_four_hours, alias="range"),
+    start: datetime | None = Query(default=None, description="Optional start timestamp (ISO-8601)."),
+    end: datetime | None = Query(default=None, description="Optional end timestamp (ISO-8601)."),
+    metric: str | None = Query(default=None, description="Optional metric key filter."),
+) -> TopicDetailResponse:
+    repository: MetricRepository = request.app.state.repository
+    if not repository.topic_exists(topic):
+        raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
+
+    resolved_start, resolved_end = _resolve_time_window(range_name=range_name, start=start, end=end)
+
+    # 1. Get Stats
+    stats = repository.stats(
+        topic=topic,
+        start=resolved_start,
+        end=resolved_end,
+        metric=metric,
+    )
+    trend = _trend_from_stats(stats)
+    summary = StatsResponse(
+        topic=topic,
+        metric=metric,
+        range=range_name,
+        start=resolved_start,
+        end=resolved_end,
+        latest=stats.latest,
+        min=stats.minimum,
+        max=stats.maximum,
+        avg=stats.average,
+        count=stats.count,
+        trend=trend,
+    )
+
+    # 2. Get History (for chart)
+    records, _ = repository.history(
+        topic=topic,
+        start=resolved_start,
+        end=resolved_end,
+        metric=metric,
+        limit=500,
+        offset=0,
+    )
+
+    points = [
+        TimeseriesPoint(ts=r.observed_at, value=r.value)
+        for r in reversed(records)
+    ]
+
+    series = TimeseriesEntry(
+        id=f"{topic}:{metric or 'all'}",
+        label=f"{topic} / {metric or 'all'}",
+        color="#3b82f6",
+        points=points,
+    )
+
+    return TopicDetailResponse(series=series, summary=summary)
 
 
 @app.get("/api/alerts/rules", response_model=list[AlertRuleResponse], tags=["alerts"])
