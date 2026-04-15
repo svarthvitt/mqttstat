@@ -115,6 +115,13 @@ class TimeseriesResponse(BaseModel):
     series: list[TimeseriesEntry]
 
 
+class TopicDetailResponse(BaseModel):
+    topic: str
+    metric: str | None
+    series: TimeseriesEntry | None
+    summary: DashboardKPIS
+
+
 class MqttConfigUpdateRequest(BaseModel):
     mqtt_host: str = Field(min_length=1, max_length=255)
     mqtt_port: int = Field(ge=1, le=65535)
@@ -658,6 +665,7 @@ def list_topics() -> TopicListResponse:
     tags=["topics"],
 )
 def topic_history(
+    request: Request,
     topic: str = PathParam(description="MQTT topic name."),
     range_name: TimeRange = Query(default=TimeRange.twenty_four_hours, alias="range"),
     start: datetime | None = Query(default=None, description="Optional start timestamp (ISO-8601)."),
@@ -666,7 +674,7 @@ def topic_history(
     limit: int = Query(default=100, ge=1, le=1000, description="Maximum number of records to return."),
     offset: int = Query(default=0, ge=0, description="Pagination offset."),
 ) -> HistoryResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = request.app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 
@@ -701,19 +709,89 @@ def topic_history(
 
 
 @app.get(
+    "/api/topics/{topic}",
+    response_model=TopicDetailResponse,
+    summary="Combined topic history and stats",
+    tags=["topics"],
+)
+def get_topic_detail(
+    request: Request,
+    topic: str = PathParam(description="MQTT topic name."),
+    start: datetime | None = Query(default=None, alias="from"),
+    end: datetime | None = Query(default=None, alias="to"),
+    metric: str | None = Query(default=None, description="Optional metric key filter."),
+) -> TopicDetailResponse:
+    repository: MetricRepository = request.app.state.repository
+    if not repository.topic_exists(topic):
+        raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
+
+    now = datetime.now(timezone.utc)
+    resolved_end = _to_utc(end) if end else now
+    resolved_start = _to_utc(start) if start else resolved_end - timedelta(days=7)
+
+    # 1. History
+    records, _ = repository.history(
+        topic=topic,
+        start=resolved_start,
+        end=resolved_end,
+        metric=metric,
+        limit=500,
+        offset=0,
+    )
+
+    points = [
+        TimeseriesPoint(ts=r.observed_at, value=r.value)
+        for r in reversed(records)
+    ]
+
+    series = TimeseriesEntry(
+        id=f"{topic}:{metric}" if metric else topic,
+        label=f"{topic} / {metric}" if metric else topic,
+        color="#3b82f6",
+        points=points,
+    ) if points else None
+
+    # 2. Stats
+    stats = repository.stats(
+        topic=topic,
+        start=resolved_start,
+        end=resolved_end,
+        metric=metric,
+    )
+    trend = _trend_from_stats(stats)
+
+    summary = DashboardKPIS(
+        latest=stats.latest,
+        min=stats.minimum,
+        max=stats.maximum,
+        avg=stats.average,
+        count=stats.count,
+        trend_pct=trend.delta_percent,
+    )
+
+    return TopicDetailResponse(
+        topic=topic,
+        metric=metric,
+        series=series,
+        summary=summary,
+    )
+
+
+@app.get(
     "/api/topics/{topic}/stats",
     response_model=StatsResponse,
     summary="Aggregated topic statistics",
     tags=["topics"],
 )
 def topic_stats(
+    request: Request,
     topic: str = PathParam(description="MQTT topic name."),
     range_name: TimeRange = Query(default=TimeRange.twenty_four_hours, alias="range"),
     start: datetime | None = Query(default=None, description="Optional start timestamp (ISO-8601)."),
     end: datetime | None = Query(default=None, description="Optional end timestamp (ISO-8601)."),
     metric: str | None = Query(default=None, description="Optional metric key filter."),
 ) -> StatsResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = request.app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 
