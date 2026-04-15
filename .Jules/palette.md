@@ -9,3 +9,6 @@
 ## 2026-04-12 - [UX] Completeness in Debug and Audit Logs
 **Learning:** Transition events that disable a logging feature must themselves be logged before the feature is deactivated. If the state check happens before recording the 'Disabled' event, the audit trail becomes incomplete and confusing to users.
 **Action:** Always allow "Disable" transition events to bypass state-based logging filters.
+## 2026-04-15 - [UX] Cleanup of transient states
+**Learning:** When implementing transient UI feedback states like a 'Copied!' message, using a raw 'setTimeout' inside an event handler can lead to memory leaks or state updates on unmounted components if the user navigates away.
+**Action:** Always manage transient state timeouts within a 'useEffect' hook and provide a cleanup function to 'clearTimeout' when the component unmounts or the state changes.
