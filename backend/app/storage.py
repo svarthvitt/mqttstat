@@ -88,32 +88,39 @@ class MetricRepository:
         # Performance optimization: cache topic names to IDs to avoid redundant lookups
         self._topic_id_cache: dict[str, int] = {}
 
-    def insert(self, record: MetricRecord) -> None:
-        topic_id = self._topic_id_cache.get(record.topic)
+    def _resolve_topic_id(self, cursor: psycopg.Cursor, topic_name: str, create_if_missing: bool = False) -> int | None:
+        """
+        Resolves a topic name to its ID, using the in-memory cache if available.
+        """
+        topic_id = self._topic_id_cache.get(topic_name)
+        if topic_id is not None:
+            return topic_id
 
+        if create_if_missing:
+            cursor.execute(
+                """
+                INSERT INTO topics (name)
+                VALUES (%s)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                (topic_name,),
+            )
+
+        cursor.execute("SELECT id FROM topics WHERE name = %s", (topic_name,))
+        row = cursor.fetchone()
+        if row:
+            topic_id = int(row[0])
+            self._topic_id_cache[topic_name] = topic_id
+            return topic_id
+
+        return None
+
+    def insert(self, record: MetricRecord) -> None:
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
+                topic_id = self._resolve_topic_id(cur, record.topic, create_if_missing=True)
                 if topic_id is None:
-                    # Cache miss: ensure topic exists and get its ID
-                    cur.execute(
-                        """
-                        INSERT INTO topics (name)
-                        VALUES (%s)
-                        ON CONFLICT (name) DO NOTHING
-                        """,
-                        (record.topic,),
-                    )
-
-                    cur.execute(
-                        "SELECT id FROM topics WHERE name = %s",
-                        (record.topic,),
-                    )
-                    topic_row = cur.fetchone()
-                    if topic_row is None:
-                        raise RuntimeError(f"Failed to resolve topic_id for topic={record.topic}")
-
-                    topic_id = int(topic_row[0])
-                    self._topic_id_cache[record.topic] = topic_id
+                    raise RuntimeError(f"Failed to resolve topic_id for topic={record.topic}")
 
                 cur.execute(
                     """
@@ -189,10 +196,13 @@ class MetricRepository:
         ]
 
     def topic_exists(self, topic: str) -> bool:
+        # Check cache first for a zero-DB-connection (or at least zero-query) win
+        if topic in self._topic_id_cache:
+            return True
+
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT 1 FROM topics WHERE name = %s", (topic,))
-                return cur.fetchone() is not None
+                return self._resolve_topic_id(cur, topic) is not None
 
     def history(
         self,
@@ -204,17 +214,20 @@ class MetricRepository:
         limit: int,
         offset: int,
     ) -> tuple[list[HistoryRecord], int]:
-        params: list[object] = [topic, start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
-
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
+                topic_id = self._resolve_topic_id(cur, topic)
+                if topic_id is None:
+                    return [], 0
+
+                params: list[object] = [topic_id, start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
+
                 if metric:
                     cur.execute(
                         """
                         SELECT COUNT(*)
                         FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
+                        WHERE topic_id = %s
                           AND m.ts >= %s
                           AND m.ts <= %s
                           AND m.metric = %s
@@ -226,8 +239,7 @@ class MetricRepository:
                         """
                         SELECT COUNT(*)
                         FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
+                        WHERE topic_id = %s
                           AND m.ts >= %s
                           AND m.ts <= %s
                         """,
@@ -240,8 +252,7 @@ class MetricRepository:
                         """
                         SELECT m.ts, m.metric, m.value
                         FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
+                        WHERE topic_id = %s
                           AND m.ts >= %s
                           AND m.ts <= %s
                           AND m.metric = %s
@@ -256,8 +267,7 @@ class MetricRepository:
                         """
                         SELECT m.ts, m.metric, m.value
                         FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
+                        WHERE topic_id = %s
                           AND m.ts >= %s
                           AND m.ts <= %s
                         ORDER BY m.ts DESC
@@ -286,10 +296,14 @@ class MetricRepository:
         end: datetime,
         metric: str | None,
     ) -> TopicStats:
-        params: list[object] = [topic, start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
-
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
+                topic_id = self._resolve_topic_id(cur, topic)
+                if topic_id is None:
+                    return TopicStats(None, None, None, None, 0, None, None, None)
+
+                params: list[object] = [topic_id, start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
+
                 if metric:
                     cur.execute(
                         """
@@ -299,8 +313,7 @@ class MetricRepository:
                             MAX(m.value) AS maximum,
                             AVG(m.value)::double precision AS average
                         FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
+                        WHERE topic_id = %s
                           AND m.ts >= %s
                           AND m.ts <= %s
                           AND m.metric = %s
@@ -316,8 +329,7 @@ class MetricRepository:
                             MAX(m.value) AS maximum,
                             AVG(m.value)::double precision AS average
                         FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
+                        WHERE topic_id = %s
                           AND m.ts >= %s
                           AND m.ts <= %s
                         """,
@@ -330,8 +342,7 @@ class MetricRepository:
                         """
                         SELECT m.value, m.ts
                         FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
+                        WHERE topic_id = %s
                           AND m.ts >= %s
                           AND m.ts <= %s
                           AND m.metric = %s
@@ -345,8 +356,7 @@ class MetricRepository:
                         """
                         SELECT m.value, m.ts
                         FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
+                        WHERE topic_id = %s
                           AND m.ts >= %s
                           AND m.ts <= %s
                         ORDER BY m.ts DESC
@@ -361,8 +371,7 @@ class MetricRepository:
                         """
                         SELECT m.value, m.ts
                         FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
+                        WHERE topic_id = %s
                           AND m.ts >= %s
                           AND m.ts <= %s
                           AND m.metric = %s
@@ -376,8 +385,7 @@ class MetricRepository:
                         """
                         SELECT m.value, m.ts
                         FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
+                        WHERE topic_id = %s
                           AND m.ts >= %s
                           AND m.ts <= %s
                         ORDER BY m.ts ASC
