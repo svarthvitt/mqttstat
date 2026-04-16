@@ -110,7 +110,8 @@ class MQTTIngestClient:
     ) -> None:
         self._topic_map = topic_map
         self._repository = repository
-        self._alert_rules_cache: list[Any] = []
+        # Optimized cache: (topic, metric) -> [rules]
+        self._alert_rules_cache: dict[tuple[str, str], list[Any]] = {}
 
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
         if username:
@@ -188,20 +189,30 @@ class MQTTIngestClient:
 
     def reload_rules(self) -> None:
         try:
-            self._alert_rules_cache = self._repository.get_active_alert_rules()
-            logger.info("Alert rules cache reloaded: %d rules active", len(self._alert_rules_cache))
+            rules = self._repository.get_active_alert_rules()
+            new_cache: dict[tuple[str, str], list[Any]] = {}
+            for r in rules:
+                key = (r.topic, r.metric)
+                if key not in new_cache:
+                    new_cache[key] = []
+                new_cache[key].append(r)
+
+            self._alert_rules_cache = new_cache
+            logger.info("Alert rules cache reloaded: %d rules active across %d (topic, metric) pairs",
+                        len(rules), len(new_cache))
         except Exception:
             logger.exception("Failed to reload alert rules cache")
 
     def _check_alerts(self, topic: str, metric_key: str, value: float) -> None:
         try:
-            for rule in self._alert_rules_cache:
-                if rule.topic == topic and rule.metric == metric_key:
-                    op = _CONDITION_MAP.get(rule.condition)
-                    if op and op(value, rule.threshold):
-                        logger.warning("Alert triggered! Topic: %s, Metric: %s, Value: %s %s %s",
-                                       topic, metric_key, value, rule.condition, rule.threshold)
-                        self._repository.insert_alert_history(rule.id, value)
+            # O(1) lookup for relevant rules
+            rules = self._alert_rules_cache.get((topic, metric_key), [])
+            for rule in rules:
+                op = _CONDITION_MAP.get(rule.condition)
+                if op and op(value, rule.threshold):
+                    logger.warning("Alert triggered! Topic: %s, Metric: %s, Value: %s %s %s",
+                                   topic, metric_key, value, rule.condition, rule.threshold)
+                    self._repository.insert_alert_history(rule.id, value)
         except Exception:
             logger.exception("Failed to check alerts for topic=%s metric=%s", topic, metric_key)
 
