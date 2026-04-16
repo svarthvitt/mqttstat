@@ -7,3 +7,7 @@
 ## 2026-05-22 - Time Window Resolution Simplification
 **Clutter:** The `_resolve_time_window` function in `main.py` used a repetitive `if/elif` chain to calculate start times for different `TimeRange` values.
 **Refactoring Win:** Consolidating the `TimeRange` to `timedelta` mappings into a constant dictionary `_TIME_RANGE_DELTAS` and simplifying the override logic makes the function more readable and easier to maintain.
+
+## 2026-05-23 - Dynamic SQL for Metric History
+**Clutter:** `MetricRepository.history` in `storage.py` contained four nearly identical SQL query executions to handle conditional metric filtering.
+**Refactoring Win:** Consolidating the logic using a dynamically built `WHERE` clause and parameter list reduced ~50 lines of redundant code and simplified future query maintenance while preserving safety via parameterized queries.
