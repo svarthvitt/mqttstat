@@ -204,78 +204,24 @@ class MetricRepository:
         limit: int,
         offset: int,
     ) -> tuple[list[HistoryRecord], int]:
-        params: list[object] = [topic, start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
-
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
+                where = "JOIN topics t ON t.id = m.topic_id WHERE t.name = %s AND m.ts >= %s AND m.ts <= %s"
+                params = [topic, start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
                 if metric:
-                    cur.execute(
-                        """
-                        SELECT COUNT(*)
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                          AND m.metric = %s
-                        """,
-                        tuple(params + [metric]),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT COUNT(*)
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                        """,
-                        tuple(params),
-                    )
+                    where += " AND m.metric = %s"
+                    params.append(metric)
+
+                cur.execute(f"SELECT COUNT(*) FROM measurements m {where}", tuple(params))
                 total = int(cur.fetchone()[0])
 
-                if metric:
-                    cur.execute(
-                        """
-                        SELECT m.ts, m.metric, m.value
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                          AND m.metric = %s
-                        ORDER BY m.ts DESC
-                        LIMIT %s
-                        OFFSET %s
-                        """,
-                        tuple(params + [metric, limit, offset]),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT m.ts, m.metric, m.value
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                        ORDER BY m.ts DESC
-                        LIMIT %s
-                        OFFSET %s
-                        """,
-                        tuple(params + [limit, offset]),
-                    )
+                cur.execute(
+                    f"SELECT m.ts, m.metric, m.value FROM measurements m {where} ORDER BY m.ts DESC LIMIT %s OFFSET %s",
+                    tuple(params + [limit, offset]),
+                )
                 rows = cur.fetchall()
 
-        records = [
-            HistoryRecord(
-                observed_at=row[0],
-                metric=row[1],
-                value=row[2],
-            )
-            for row in rows
-        ]
+        records = [HistoryRecord(observed_at=row[0], metric=row[1], value=row[2]) for row in rows]
         return records, total
 
     def stats(
