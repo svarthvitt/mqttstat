@@ -9,3 +9,7 @@
 ## 2026-04-12 - [UX] Completeness in Debug and Audit Logs
 **Learning:** Transition events that disable a logging feature must themselves be logged before the feature is deactivated. If the state check happens before recording the 'Disabled' event, the audit trail becomes incomplete and confusing to users.
 **Action:** Always allow "Disable" transition events to bypass state-based logging filters.
+
+## 2026-04-17 - [UX/A11y] Non-disruptive feedback and Accessible Collapsibles
+**Learning:** Collapsible utility panels often overlook standard ARIA attributes (`aria-expanded`, `aria-controls`), making them invisible to screen readers. Additionally, using `window.alert` for success feedback is disruptive; inline transient states (e.g., '✅ Copied!') provide a smoother flow.
+**Action:** Always link toggle buttons to their content via unique IDs and ARIA attributes. Favor non-disruptive inline feedback over modal alerts. Avoid hardcoded hex colors in inline styles to respect design system boundaries; use emojis for visual clarity if custom classes are prohibited.
