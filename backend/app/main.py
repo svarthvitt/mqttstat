@@ -516,23 +516,30 @@ def get_timeseries(
     result_series = []
 
     ids = [s.strip() for s in series.split(",") if s.strip()]
-    for i, series_id in enumerate(ids):
-        if ":" not in series_id:
-            continue
-        topic, metric = series_id.split(":", 1)
+    series_to_query = []
+    for series_id in ids:
+        if ":" in series_id:
+            topic, metric = series_id.split(":", 1)
+            series_to_query.append((topic, metric))
 
-        records, _ = repository.history(
-            topic=topic,
-            metric=metric,
-            start=resolved_start,
-            end=resolved_end,
-            limit=500,
-            offset=0
-        )
+    if not series_to_query:
+        return TimeseriesResponse(series=[])
+
+    # Performance optimization: fetch all series in a single batch query
+    batch_data = repository.history_batch(
+        series_ids=series_to_query,
+        start=resolved_start,
+        end=resolved_end,
+        limit_per_series=500
+    )
+
+    for i, (topic, metric) in enumerate(series_to_query):
+        series_id = f"{topic}:{metric}"
+        records = batch_data.get(series_id, [])
 
         points = [
             TimeseriesPoint(ts=r.observed_at, value=r.value)
-            for r in reversed(records) # Return in chronological order
+            for r in reversed(records)  # Return in chronological order
         ]
 
         result_series.append(TimeseriesEntry(
@@ -666,7 +673,7 @@ def topic_history(
     limit: int = Query(default=100, ge=1, le=1000, description="Maximum number of records to return."),
     offset: int = Query(default=0, ge=0, description="Pagination offset."),
 ) -> HistoryResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 
@@ -713,7 +720,7 @@ def topic_stats(
     end: datetime | None = Query(default=None, description="Optional end timestamp (ISO-8601)."),
     metric: str | None = Query(default=None, description="Optional metric key filter."),
 ) -> StatsResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 
