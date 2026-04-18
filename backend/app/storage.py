@@ -278,6 +278,69 @@ class MetricRepository:
         ]
         return records, total
 
+    def history_batch(
+        self,
+        *,
+        series_filters: list[tuple[str, str]],
+        start: datetime,
+        end: datetime,
+        limit_per_series: int = 500,
+    ) -> dict[tuple[str, str], list[HistoryRecord]]:
+        """
+        Optimized batch fetch for multiple time-series in a single query.
+        Reduces database round-trips from 2N+1 to 1.
+        """
+        if not series_filters:
+            return {}
+
+        # Prepare parameters: (topic, metric) tuples, start, end, limit
+        # Psycopg 3 can handle the list of tuples for the IN clause
+        params = [
+            tuple(series_filters),
+            start.astimezone(timezone.utc),
+            end.astimezone(timezone.utc),
+            limit_per_series,
+        ]
+
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH filtered AS (
+                        SELECT
+                            t.name AS topic_name,
+                            m.metric,
+                            m.ts,
+                            m.value,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY t.name, m.metric
+                                ORDER BY m.ts DESC
+                            ) as rnk
+                        FROM measurements m
+                        JOIN topics t ON t.id = m.topic_id
+                        WHERE (t.name, m.metric) IN %s
+                          AND m.ts >= %s
+                          AND m.ts <= %s
+                    )
+                    SELECT topic_name, metric, ts, value
+                    FROM filtered
+                    WHERE rnk <= %s
+                    ORDER BY ts DESC
+                    """,
+                    params,
+                )
+                rows = cur.fetchall()
+
+        results: dict[tuple[str, str], list[HistoryRecord]] = {
+            (topic, metric): [] for topic, metric in series_filters
+        }
+        for row in rows:
+            results[(row[0], row[1])].append(
+                HistoryRecord(observed_at=row[2], metric=row[1], value=row[3])
+            )
+
+        return results
+
     def stats(
         self,
         *,
