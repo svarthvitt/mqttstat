@@ -9,3 +9,7 @@
 ## 2026-04-12 - [UX] Completeness in Debug and Audit Logs
 **Learning:** Transition events that disable a logging feature must themselves be logged before the feature is deactivated. If the state check happens before recording the 'Disabled' event, the audit trail becomes incomplete and confusing to users.
 **Action:** Always allow "Disable" transition events to bypass state-based logging filters.
+
+## 2025-05-14 - Non-disruptive feedback for clipboard actions
+**Learning:** Replacing `window.alert` with transient inline button feedback (e.g., "✅ Copied!") significantly improves user flow by avoiding modal interruptions.
+**Action:** Use a 2000ms timeout with a React state and `useEffect` cleanup for consistent, non-disruptive interaction feedback across the app.
