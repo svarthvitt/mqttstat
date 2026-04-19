@@ -516,29 +516,42 @@ def get_timeseries(
     result_series = []
 
     ids = [s.strip() for s in series.split(",") if s.strip()]
+    topic_metrics = []
+    series_metadata = []
+
     for i, series_id in enumerate(ids):
         if ":" not in series_id:
             continue
         topic, metric = series_id.split(":", 1)
+        topic_metrics.append((topic, metric))
+        series_metadata.append({
+            "id": series_id,
+            "topic": topic,
+            "metric": metric,
+            "color": colors[i % len(colors)]
+        })
 
-        records, _ = repository.history(
-            topic=topic,
-            metric=metric,
-            start=resolved_start,
-            end=resolved_end,
-            limit=500,
-            offset=0
-        )
+    # Optimized batch fetch to avoid N+1 queries
+    batch_results = repository.history_batch(
+        topic_metrics=topic_metrics,
+        start=resolved_start,
+        end=resolved_end,
+        limit_per_series=500
+    )
+
+    for meta in series_metadata:
+        series_id = meta["id"]
+        records = batch_results.get(series_id, [])
 
         points = [
             TimeseriesPoint(ts=r.observed_at, value=r.value)
-            for r in reversed(records) # Return in chronological order
+            for r in reversed(records)  # Return in chronological order
         ]
 
         result_series.append(TimeseriesEntry(
             id=series_id,
-            label=f"{topic} / {metric}",
-            color=colors[i % len(colors)],
+            label=f"{meta['topic']} / {meta['metric']}",
+            color=meta["color"],
             points=points
         ))
 
