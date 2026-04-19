@@ -464,6 +464,75 @@ class MetricRepository:
             latest_observed_at=latest_row[1] if latest_row else None,
         )
 
+    def history_batch(
+        self,
+        *,
+        topic_metrics: list[tuple[str, str]],
+        start: datetime,
+        end: datetime,
+        limit_per_series: int,
+    ) -> dict[str, list[HistoryRecord]]:
+        """
+        Efficiently fetch history for multiple topic-metric pairs in a single query.
+        Uses a window function to apply per-series limits.
+        """
+        if not topic_metrics:
+            return {}
+
+        start_utc = start.astimezone(timezone.utc)
+        end_utc = end.astimezone(timezone.utc)
+        result = {f"{t}:{m}": [] for t, m in topic_metrics}
+
+        topics = [tm[0] for tm in topic_metrics]
+        metrics = [tm[1] for tm in topic_metrics]
+
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                # Use window function ROW_NUMBER to limit results per (topic, metric) pair
+                # within a single scan of the measurements table joined with topics.
+                cur.execute(
+                    """
+                    WITH requested_series AS (
+                        SELECT DISTINCT unnest(%s::text[]) as t_name, unnest(%s::text[]) as m_name
+                    ),
+                    ranked_measurements AS (
+                        SELECT
+                            m.ts,
+                            m.metric,
+                            m.value,
+                            t.name as topic_name,
+                            ROW_NUMBER() OVER(
+                                PARTITION BY t.name, m.metric
+                                ORDER BY m.ts DESC
+                            ) as rn
+                        FROM measurements m
+                        JOIN topics t ON t.id = m.topic_id
+                        JOIN requested_series rs ON t.name = rs.t_name AND m.metric = rs.m_name
+                        WHERE m.ts >= %s AND m.ts <= %s
+                    )
+                    SELECT ts, metric, value, topic_name
+                    FROM ranked_measurements
+                    WHERE rn <= %s
+                    ORDER BY ts DESC
+                    """,
+                    (topics, metrics, start_utc, end_utc, limit_per_series),
+                )
+                rows = cur.fetchall()
+
+        for row in rows:
+            ts, metric, value, topic = row
+            key = f"{topic}:{metric}"
+            if key in result:
+                result[key].append(
+                    HistoryRecord(
+                        observed_at=ts,
+                        metric=metric,
+                        value=value,
+                    )
+                )
+
+        return result
+
     def get_mqtt_runtime_config(self) -> MqttRuntimeConfig | None:
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
