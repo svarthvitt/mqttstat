@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Anti-pattern: Redundant lookup in high-frequency ingestion]
 **Learning:** Every MQTT message insertion triggered a topic name to ID lookup via `INSERT ... ON CONFLICT` and `SELECT`. In a high-frequency system, this triples the database load.
 **Action:** Use in-memory caching for static or slow-changing metadata (like topic IDs) to optimize hot paths.
+
+## 2025-05-15 - [Anti-pattern: Sequential time-series retrieval]
+**Learning:** Fetching multiple time-series independently for a single chart view creates an N+1 query pattern that scales poorly with the number of series.
+**Action:** Use PostgreSQL window functions (ROW_NUMBER) combined with 'unnest' for batch parameters to fetch 'Top N' records for multiple groups in a single roundtrip.

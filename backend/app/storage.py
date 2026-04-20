@@ -194,6 +194,72 @@ class MetricRepository:
                 cur.execute("SELECT 1 FROM topics WHERE name = %s", (topic,))
                 return cur.fetchone() is not None
 
+    def history_batch(
+        self,
+        *,
+        queries: list[tuple[str, str]],
+        start: datetime,
+        end: datetime,
+        limit_per_series: int,
+    ) -> dict[tuple[str, str], list[HistoryRecord]]:
+        """
+        Optimized method to fetch history for multiple topic-metric pairs in a single query.
+        Uses window functions to avoid N+1 database roundtrips.
+        """
+        if not queries:
+            return {}
+
+        # De-duplicate queries to avoid redundant work
+        unique_queries = list(set(queries))
+        topics = [q[0] for q in unique_queries]
+        metrics = [q[1] for q in unique_queries]
+
+        start_utc = start.astimezone(timezone.utc)
+        end_utc = end.astimezone(timezone.utc)
+
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH target_series(topic, metric) AS (
+                        SELECT * FROM unnest(%s::text[], %s::text[])
+                    ),
+                    ranked_measurements AS (
+                        SELECT
+                            t.name AS topic_name,
+                            m.metric,
+                            m.ts,
+                            m.value,
+                            ROW_NUMBER() OVER(PARTITION BY t.name, m.metric ORDER BY m.ts DESC) AS rn
+                        FROM measurements m
+                        JOIN topics t ON t.id = m.topic_id
+                        JOIN target_series ts ON t.name = ts.topic AND m.metric = ts.metric
+                        WHERE m.ts >= %s AND m.ts <= %s
+                    )
+                    SELECT topic_name, metric, ts, value
+                    FROM ranked_measurements
+                    WHERE rn <= %s
+                    ORDER BY topic_name ASC, metric ASC, ts DESC
+                    """,
+                    (topics, metrics, start_utc, end_utc, limit_per_series),
+                )
+                rows = cur.fetchall()
+
+        results: dict[tuple[str, str], list[HistoryRecord]] = {q: [] for q in unique_queries}
+        for row in rows:
+            topic_name, metric, ts, value = row
+            key = (topic_name, metric)
+            if key in results:
+                results[key].append(
+                    HistoryRecord(
+                        observed_at=ts,
+                        metric=metric,
+                        value=value,
+                    )
+                )
+
+        return results
+
     def history(
         self,
         *,

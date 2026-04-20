@@ -516,23 +516,31 @@ def get_timeseries(
     result_series = []
 
     ids = [s.strip() for s in series.split(",") if s.strip()]
-    for i, series_id in enumerate(ids):
+    queries = []
+    series_metadata = []
+
+    for series_id in ids:
         if ":" not in series_id:
             continue
         topic, metric = series_id.split(":", 1)
+        queries.append((topic, metric))
+        series_metadata.append((series_id, topic, metric))
 
-        records, _ = repository.history(
-            topic=topic,
-            metric=metric,
-            start=resolved_start,
-            end=resolved_end,
-            limit=500,
-            offset=0
-        )
+    # Optimization: Use history_batch to fetch all series in a single DB roundtrip
+    # to avoid N+1 query pattern.
+    batch_results = repository.history_batch(
+        queries=queries,
+        start=resolved_start,
+        end=resolved_end,
+        limit_per_series=500,
+    )
+
+    for i, (series_id, topic, metric) in enumerate(series_metadata):
+        records = batch_results.get((topic, metric), [])
 
         points = [
             TimeseriesPoint(ts=r.observed_at, value=r.value)
-            for r in reversed(records) # Return in chronological order
+            for r in reversed(records)  # Return in chronological order
         ]
 
         result_series.append(TimeseriesEntry(
