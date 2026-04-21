@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Anti-pattern: Redundant lookup in high-frequency ingestion]
 **Learning:** Every MQTT message insertion triggered a topic name to ID lookup via `INSERT ... ON CONFLICT` and `SELECT`. In a high-frequency system, this triples the database load.
 **Action:** Use in-memory caching for static or slow-changing metadata (like topic IDs) to optimize hot paths.
+
+## 2025-05-16 - [Optimization: Batching Timeseries Queries]
+**Learning:** Fetching multiple time series for a dashboard resulted in N database roundtrips (one per series). Using window functions like `ROW_NUMBER() OVER(PARTITION BY ...)` allows fetching multiple limited series in a single query.
+**Action:** Use batching with window functions when multiple independent but similar data series are needed for a single view.
