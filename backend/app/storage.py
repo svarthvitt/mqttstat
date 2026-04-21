@@ -278,6 +278,66 @@ class MetricRepository:
         ]
         return records, total
 
+    def history_batch(
+        self,
+        *,
+        queries: list[tuple[str, str]],
+        start: datetime,
+        end: datetime,
+        limit_per_series: int = 500,
+    ) -> dict[tuple[str, str], list[HistoryRecord]]:
+        """
+        Fetch history for multiple topic-metric pairs in a single database roundtrip.
+        Uses window functions to apply per-series limits efficiently.
+        """
+        if not queries:
+            return {}
+
+        topics = [q[0] for q in queries]
+        metrics = [q[1] for q in queries]
+
+        start_utc = start.astimezone(timezone.utc)
+        end_utc = end.astimezone(timezone.utc)
+
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                # Use a CTE with unnest to join against the requested pairs
+                cur.execute(
+                    """
+                    WITH requested AS (
+                        SELECT DISTINCT * FROM unnest(%s::text[], %s::text[]) AS r(topic, metric)
+                    ),
+                    ranked AS (
+                        SELECT
+                            t.name AS topic,
+                            m.metric,
+                            m.ts,
+                            m.value,
+                            ROW_NUMBER() OVER(PARTITION BY t.name, m.metric ORDER BY m.ts DESC) as rank
+                        FROM measurements m
+                        JOIN topics t ON t.id = m.topic_id
+                        JOIN requested r ON t.name = r.topic AND m.metric = r.metric
+                        WHERE m.ts >= %s AND m.ts <= %s
+                    )
+                    SELECT topic, metric, ts, value
+                    FROM ranked
+                    WHERE rank <= %s
+                    ORDER BY ts DESC
+                    """,
+                    (topics, metrics, start_utc, end_utc, limit_per_series),
+                )
+                rows = cur.fetchall()
+
+        # Group results by (topic, metric)
+        results: dict[tuple[str, str], list[HistoryRecord]] = {q: [] for q in queries}
+        for row in rows:
+            topic, metric, ts, value = row
+            results[(topic, metric)].append(
+                HistoryRecord(observed_at=ts, metric=metric, value=value)
+            )
+
+        return results
+
     def stats(
         self,
         *,
