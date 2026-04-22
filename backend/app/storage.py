@@ -278,6 +278,82 @@ class MetricRepository:
         ]
         return records, total
 
+    def history_batch(
+        self,
+        *,
+        series_keys: list[tuple[str, str]],
+        start: datetime,
+        end: datetime,
+        limit_per_series: int = 500,
+    ) -> dict[tuple[str, str], list[HistoryRecord]]:
+        """
+        Batch fetch history for multiple topic/metric pairs in a single query.
+        Uses a window function to enforce per-series limits.
+        """
+        if not series_keys:
+            return {}
+
+        topic_names = list(set(name for name, _ in series_keys))
+        results: dict[tuple[str, str], list[HistoryRecord]] = {key: [] for key in series_keys}
+
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                # 1. Resolve topic IDs (utilizing cache)
+                missing_names = [n for n in topic_names if n not in self._topic_id_cache]
+                if missing_names:
+                    cur.execute("SELECT name, id FROM topics WHERE name = ANY(%s)", (missing_names,))
+                    for name, tid in cur.fetchall():
+                        self._topic_id_cache[name] = tid
+
+                # 2. Map series keys to (topic_id, metric) and prepare reverse lookup
+                id_metric_pairs = []
+                id_to_name = {}
+                for name, metric in series_keys:
+                    tid = self._topic_id_cache.get(name)
+                    if tid is not None:
+                        id_metric_pairs.append((tid, metric))
+                        id_to_name[tid] = name
+
+                if not id_metric_pairs:
+                    return results
+
+                # 3. Batch query with window function
+                # We use tuple(id_metric_pairs) for the IN clause.
+                # (col1, col2) IN ((v1, v2), (v3, v4)) is efficient and standard PG.
+                query = """
+                SELECT ts, metric, value, topic_id
+                FROM (
+                    SELECT m.ts, m.metric, m.value, m.topic_id,
+                           ROW_NUMBER() OVER(PARTITION BY m.topic_id, m.metric ORDER BY m.ts DESC) as rn
+                    FROM measurements m
+                    WHERE (m.topic_id, m.metric) IN %s
+                      AND m.ts >= %s
+                      AND m.ts <= %s
+                ) sub
+                WHERE rn <= %s
+                ORDER BY ts DESC
+                """
+                cur.execute(
+                    query,
+                    (
+                        tuple(id_metric_pairs),
+                        start.astimezone(timezone.utc),
+                        end.astimezone(timezone.utc),
+                        limit_per_series,
+                    ),
+                )
+                rows = cur.fetchall()
+
+                # 4. Group results
+                for ts, metric, value, topic_id in rows:
+                    topic_name = id_to_name.get(topic_id)
+                    if topic_name:
+                        key = (topic_name, metric)
+                        if key in results:
+                            results[key].append(HistoryRecord(observed_at=ts, metric=metric, value=value))
+
+        return results
+
     def stats(
         self,
         *,
