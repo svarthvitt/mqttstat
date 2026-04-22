@@ -516,19 +516,29 @@ def get_timeseries(
     result_series = []
 
     ids = [s.strip() for s in series.split(",") if s.strip()]
+    series_keys = []
+    id_map = {} # Maps (topic, metric) -> series_id
+    for series_id in ids:
+        if ":" not in series_id:
+            continue
+        topic, metric = series_id.split(":", 1)
+        series_keys.append((topic, metric))
+        id_map[(topic, metric)] = series_id
+
+    # Batch fetch history for all unique requested series
+    unique_series_keys = list(set(series_keys))
+    batch_results = repository.history_batch(
+        series_keys=unique_series_keys,
+        start=resolved_start,
+        end=resolved_end,
+        limit_per_series=500
+    )
+
     for i, series_id in enumerate(ids):
         if ":" not in series_id:
             continue
         topic, metric = series_id.split(":", 1)
-
-        records, _ = repository.history(
-            topic=topic,
-            metric=metric,
-            start=resolved_start,
-            end=resolved_end,
-            limit=500,
-            offset=0
-        )
+        records = batch_results.get((topic, metric), [])
 
         points = [
             TimeseriesPoint(ts=r.observed_at, value=r.value)
