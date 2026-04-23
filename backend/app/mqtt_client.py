@@ -156,11 +156,12 @@ class MQTTIngestClient:
 
     def _handle_json(self, topic: str, raw_payload: str, observed_at: datetime, mapping: TopicMapping) -> None:
         payload = json.loads(raw_payload)
+        records = []
 
         for field_mapping in mapping.json_fields:
             value = _extract_path(payload, field_mapping.field)
             numeric_value = float(value)
-            self._repository.insert(
+            records.append(
                 MetricRecord(
                     topic=topic,
                     metric_key=field_mapping.metric_key,
@@ -170,7 +171,14 @@ class MQTTIngestClient:
                     payload_json=payload,
                 )
             )
-            self._check_alerts(topic, field_mapping.metric_key, numeric_value)
+
+        if records:
+            # Performance optimization: insert all metrics from the payload in a single batch
+            self._repository.insert_batch(records)
+
+            # Check alerts for each extracted metric
+            for record in records:
+                self._check_alerts(topic, record.metric_key, record.numeric_value)
 
     def _handle_raw_numeric(self, topic: str, raw_payload: str, observed_at: datetime, mapping: TopicMapping) -> None:
         numeric_value = float(raw_payload.strip())
