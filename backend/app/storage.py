@@ -88,6 +88,34 @@ class MetricRepository:
         # Performance optimization: cache topic names to IDs to avoid redundant lookups
         self._topic_id_cache: dict[str, int] = {}
 
+    def _get_topic_ids(self, topics: list[str], cur: psycopg.Cursor | None = None) -> dict[str, int]:
+        """
+        Resolves multiple topic names to their IDs, utilizing the in-memory cache.
+        If a cursor is provided, it uses it instead of opening a new connection.
+        """
+        unique_topics = list(set(topics))
+        missing = [t for t in unique_topics if t not in self._topic_id_cache]
+
+        if missing:
+            if cur:
+                cur.execute(
+                    "SELECT name, id FROM topics WHERE name = ANY(%s)",
+                    (missing,),
+                )
+                for name, topic_id in cur.fetchall():
+                    self._topic_id_cache[name] = topic_id
+            else:
+                with psycopg.connect(self._database_url) as conn:
+                    with conn.cursor() as cur_internal:
+                        cur_internal.execute(
+                            "SELECT name, id FROM topics WHERE name = ANY(%s)",
+                            (missing,),
+                        )
+                        for name, topic_id in cur_internal.fetchall():
+                            self._topic_id_cache[name] = topic_id
+
+        return {t: self._topic_id_cache[t] for t in unique_topics if t in self._topic_id_cache}
+
     def insert(self, record: MetricRecord) -> None:
         topic_id = self._topic_id_cache.get(record.topic)
 
@@ -277,6 +305,75 @@ class MetricRepository:
             for row in rows
         ]
         return records, total
+
+    def history_batch(
+        self,
+        *,
+        series_keys: list[tuple[str, str]],
+        start: datetime,
+        end: datetime,
+        limit_per_series: int = 500,
+    ) -> dict[tuple[str, str], list[HistoryRecord]]:
+        """
+        Fetches history for multiple (topic, metric) pairs in a single database query.
+        Uses a window function to apply limits per series efficiently.
+        """
+        if not series_keys:
+            return {}
+
+        results: dict[tuple[str, str], list[HistoryRecord]] = {k: [] for k in series_keys}
+        params: list[object] = [start.astimezone(timezone.utc), end.astimezone(timezone.utc), limit_per_series]
+
+        with psycopg.connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                topic_names = [k[0] for k in series_keys]
+                topic_map = self._get_topic_ids(topic_names, cur=cur)
+
+                # Map requested keys to (topic_id, metric) for the query
+                id_metric_pairs = []
+                for topic, metric in series_keys:
+                    if topic in topic_map:
+                        id_metric_pairs.append((topic_map[topic], metric))
+
+                if not id_metric_pairs:
+                    return {}
+
+                # Use unnest with two arrays to match multiple (topic_id, metric) pairs efficiently
+                query = """
+                    WITH target_series(tid, mkey) AS (
+                        SELECT * FROM unnest(%s, %s)
+                    ),
+                    ranked_measurements AS (
+                        SELECT
+                            m.ts,
+                            m.metric,
+                            m.value,
+                            t.name as topic_name,
+                            ROW_NUMBER() OVER (PARTITION BY m.topic_id, m.metric ORDER BY m.ts DESC) as rank
+                        FROM measurements m
+                        JOIN topics t ON t.id = m.topic_id
+                        JOIN target_series ts ON ts.tid = m.topic_id AND ts.mkey = m.metric
+                        WHERE m.ts >= %s AND m.ts <= %s
+                    )
+                    SELECT ts, metric, value, topic_name
+                    FROM ranked_measurements
+                    WHERE rank <= %s
+                    ORDER BY ts DESC
+                """
+
+                tids = [p[0] for p in id_metric_pairs]
+                mkeys = [p[1] for p in id_metric_pairs]
+
+                cur.execute(query, (tids, mkeys, params[0], params[1], params[2]))
+                rows = cur.fetchall()
+
+        for row in rows:
+            ts, metric, value, topic_name = row
+            key = (topic_name, metric)
+            if key in results:
+                results[key].append(HistoryRecord(observed_at=ts, metric=metric, value=value))
+
+        return results
 
     def stats(
         self,

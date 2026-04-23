@@ -503,11 +503,12 @@ def get_dashboard(
 
 @app.get("/api/timeseries", response_model=TimeseriesResponse, tags=["dashboard"])
 def get_timeseries(
+    request: Request,
     series: str = Query(description="Comma-separated list of topic:metric IDs"),
     start: datetime | None = Query(default=None, alias="from"),
     end: datetime | None = Query(default=None, alias="to"),
 ) -> TimeseriesResponse:
-    repository: MetricRepository = app.state.repository
+    repository: MetricRepository = request.app.state.repository
     now = datetime.now(timezone.utc)
     resolved_end = _to_utc(end) if end else now
     resolved_start = _to_utc(start) if start else resolved_end - timedelta(hours=24)
@@ -516,19 +517,25 @@ def get_timeseries(
     result_series = []
 
     ids = [s.strip() for s in series.split(",") if s.strip()]
-    for i, series_id in enumerate(ids):
-        if ":" not in series_id:
-            continue
-        topic, metric = series_id.split(":", 1)
+    series_keys = []
+    for s_id in ids:
+        if ":" in s_id:
+            series_keys.append(tuple(s_id.split(":", 1)))
 
-        records, _ = repository.history(
-            topic=topic,
-            metric=metric,
-            start=resolved_start,
-            end=resolved_end,
-            limit=500,
-            offset=0
-        )
+    # Fetch all series in a single optimized query
+    # Using unique keys for the batch call to avoid redundant work
+    unique_keys = list(set(series_keys))
+    batch_results = repository.history_batch(
+        series_keys=unique_keys,
+        start=resolved_start,
+        end=resolved_end,
+        limit_per_series=500,
+    )
+
+    # Map back to original requested order to maintain color/order consistency
+    for i, (topic, metric) in enumerate(series_keys):
+        series_id = f"{topic}:{metric}"
+        records = batch_results.get((topic, metric), [])
 
         points = [
             TimeseriesPoint(ts=r.observed_at, value=r.value)
@@ -658,6 +665,7 @@ def list_topics() -> TopicListResponse:
     tags=["topics"],
 )
 def topic_history(
+    request: Request,
     topic: str = PathParam(description="MQTT topic name."),
     range_name: TimeRange = Query(default=TimeRange.twenty_four_hours, alias="range"),
     start: datetime | None = Query(default=None, description="Optional start timestamp (ISO-8601)."),
@@ -666,7 +674,7 @@ def topic_history(
     limit: int = Query(default=100, ge=1, le=1000, description="Maximum number of records to return."),
     offset: int = Query(default=0, ge=0, description="Pagination offset."),
 ) -> HistoryResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = request.app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 
@@ -707,13 +715,14 @@ def topic_history(
     tags=["topics"],
 )
 def topic_stats(
+    request: Request,
     topic: str = PathParam(description="MQTT topic name."),
     range_name: TimeRange = Query(default=TimeRange.twenty_four_hours, alias="range"),
     start: datetime | None = Query(default=None, description="Optional start timestamp (ISO-8601)."),
     end: datetime | None = Query(default=None, description="Optional end timestamp (ISO-8601)."),
     metric: str | None = Query(default=None, description="Optional metric key filter."),
 ) -> StatsResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = request.app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 
