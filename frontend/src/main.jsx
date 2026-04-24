@@ -206,11 +206,18 @@ function DebugPanel() {
   const [open, setOpen] = useState(false)
   const [enabled, setEnabled] = useState(debugEnabled)
   const [entries, setEntries] = useState(() => [...debugLogEntries])
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => subscribeToDebug((nextEntries, isEnabled) => {
     setEntries(nextEntries)
     setEnabled(isEnabled)
   }), [])
+
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(timer)
+  }, [copied])
 
   const onToggleDebug = (event) => {
     setDebugMode(event.target.checked)
@@ -225,7 +232,7 @@ function DebugPanel() {
     }, null, 2)
     try {
       await navigator.clipboard.writeText(payload)
-      window.alert('Copied debug logs to clipboard.')
+      setCopied(true)
     } catch {
       window.alert('Copy failed. Use Download logs instead.')
     }
@@ -251,18 +258,26 @@ function DebugPanel() {
 
   return (
     <aside className={`debug-panel ${open ? 'open' : ''}`}>
-      <button type="button" className="debug-toggle" onClick={() => setOpen((prev) => !prev)}>
+      <button
+        type="button"
+        className="debug-toggle"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+        aria-controls="debug-panel-content"
+      >
         {open ? 'Hide debug' : 'Debug mode'}
       </button>
       {open ? (
-        <div className="debug-content">
+        <div className="debug-content" id="debug-panel-content" role="region">
           <label className="debug-enable">
             <input type="checkbox" checked={enabled} onChange={onToggleDebug} />
             Enable request debug logs
           </label>
           <p className="debug-note">Tip: open with <code>?debug=1</code> once to persist this mode.</p>
           <div className="debug-actions">
-            <button type="button" onClick={onCopyLogs} disabled={!entries.length}>Copy logs</button>
+            <button type="button" onClick={onCopyLogs} disabled={!entries.length}>
+              {copied ? '✅ Copied!' : 'Copy logs'}
+            </button>
             <button type="button" onClick={onDownloadLogs} disabled={!entries.length}>Download logs</button>
             <button type="button" onClick={clearDebugLogs} disabled={!entries.length}>Clear</button>
           </div>
