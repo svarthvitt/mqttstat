@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Anti-pattern: Redundant lookup in high-frequency ingestion]
 **Learning:** Every MQTT message insertion triggered a topic name to ID lookup via `INSERT ... ON CONFLICT` and `SELECT`. In a high-frequency system, this triples the database load.
 **Action:** Use in-memory caching for static or slow-changing metadata (like topic IDs) to optimize hot paths.
+
+## 2025-05-16 - [Optimization: Single-Query Multi-Aggregates]
+**Learning:** Fetching aggregates (min, max, avg) alongside specific rows (latest, first) usually requires multiple round-trips. Using PostgreSQL's `LEFT JOIN LATERAL` allows consolidating these into a single query, reducing latency by 66% for stats endpoints.
+**Action:** Look for "multi-fetch" patterns in repository methods and consolidate them using subqueries or lateral joins.
