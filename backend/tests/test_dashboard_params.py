@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.storage import TopicStats
+from app.storage import TopicStats, GlobalDashboardStats
 
 
 def _utc(ts: str) -> datetime:
@@ -20,7 +20,7 @@ class FakeDashboardRepository:
 
     def get_global_stats(self, *, start: datetime, end: datetime):
         self.calls.append((start, end))
-        return TopicStats(
+        kpis = TopicStats(
             latest=None,
             minimum=None,
             maximum=None,
@@ -29,6 +29,12 @@ class FakeDashboardRepository:
             first_value=None,
             first_observed_at=None,
             latest_observed_at=None,
+        )
+        return GlobalDashboardStats(
+            kpis=kpis,
+            total_topics=0,
+            total_measurements=0,
+            latest_topic_name=None
         )
 
 

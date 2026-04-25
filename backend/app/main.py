@@ -468,13 +468,10 @@ def get_dashboard(
     resolved_end = _to_utc(effective_end) if effective_end else now
     resolved_start = _to_utc(effective_start) if effective_start else resolved_end - timedelta(hours=24)
 
-    # Simplified dashboard data - in a real app this would be more complex
-    topics = repository.list_topics()
-    total_measurements = sum(t.metric_count for t in topics)
-
-    # Calculate global KPIs across all topics/metrics for the range
-    # Using optimized global_stats to avoid N+1 queries
-    stats = repository.get_global_stats(start=resolved_start, end=resolved_end)
+    # Fetch global KPIs and summary metadata in a single database roundtrip.
+    # This avoids the expensive repository.list_topics() call which involves a full table scan and grouping.
+    summary = repository.get_global_stats(start=resolved_start, end=resolved_end)
+    stats = summary.kpis
 
     kpis = DashboardKPIS(
         latest=stats.latest,
@@ -486,16 +483,15 @@ def get_dashboard(
     )
 
     cards = [
-        DashboardCard(key="topics", label="Active Topics", value=str(len(topics))),
-        DashboardCard(key="measurements", label="Total Measurements", value=str(total_measurements)),
+        DashboardCard(key="topics", label="Active Topics", value=str(summary.total_topics)),
+        DashboardCard(key="measurements", label="Total Measurements", value=str(summary.total_measurements)),
     ]
-    if topics:
-        latest_topic = max(topics, key=lambda t: t.latest_observed_at or datetime.min.replace(tzinfo=timezone.utc))
+    if summary.latest_topic_name:
         cards.append(DashboardCard(
             key="latest_topic",
             label="Most Recent Topic",
-            value=latest_topic.name,
-            hint=f"Updated {latest_topic.latest_observed_at.strftime('%H:%M:%S')}" if latest_topic.latest_observed_at else None
+            value=summary.latest_topic_name,
+            hint=f"Updated {stats.latest_observed_at.strftime('%H:%M:%S')}" if stats.latest_observed_at else None
         ))
 
     return DashboardResponse(cards=cards, kpis=kpis)
