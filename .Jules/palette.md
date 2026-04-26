@@ -9,3 +9,7 @@
 ## 2026-04-12 - [UX] Completeness in Debug and Audit Logs
 **Learning:** Transition events that disable a logging feature must themselves be logged before the feature is deactivated. If the state check happens before recording the 'Disabled' event, the audit trail becomes incomplete and confusing to users.
 **Action:** Always allow "Disable" transition events to bypass state-based logging filters.
+
+## 2026-04-12 - [A11y/UX] Accessible Collapsible Components & Transient Feedback
+**Learning:** Collapsible components require `aria-expanded` and `aria-controls` linked to a unique container ID to be properly announced by screen readers. For high-frequency non-critical actions like "Copy to clipboard", transient inline feedback (e.g., "✅ Copied!") is significantly less disruptive than modal `window.alert` dialogs.
+**Action:** Always implement ARIA attributes for collapsible regions and prefer transient state labels for success feedback on utility actions.
