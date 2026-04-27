@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Anti-pattern: Redundant lookup in high-frequency ingestion]
 **Learning:** Every MQTT message insertion triggered a topic name to ID lookup via `INSERT ... ON CONFLICT` and `SELECT`. In a high-frequency system, this triples the database load.
 **Action:** Use in-memory caching for static or slow-changing metadata (like topic IDs) to optimize hot paths.
+
+## 2025-05-15 - [Consolidated Database Queries with Window Functions]
+**Learning:** Using `COUNT(*) OVER()` to consolidate count and record fetch reduces round-trips but has an edge case: if the `OFFSET` is greater than the total count, zero rows are returned, and the window function result is lost (returning total=0).
+**Action:** Use this pattern for performance, but be aware of its behavior for out-of-bounds pagination requests.

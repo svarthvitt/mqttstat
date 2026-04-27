@@ -204,70 +204,44 @@ class MetricRepository:
         limit: int,
         offset: int,
     ) -> tuple[list[HistoryRecord], int]:
-        params: list[object] = [topic, start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
+        """
+        Fetches measurement history with total count in a single query.
+        Reduces database round-trips from 2 to 1 and removes redundant branching.
+        """
+        params: dict[str, Any] = {
+            "topic": topic,
+            "start": start.astimezone(timezone.utc),
+            "end": end.astimezone(timezone.utc),
+            "metric": metric,
+            "limit": limit,
+            "offset": offset,
+        }
+
+        metric_filter = "AND m.metric = %(metric)s" if metric else ""
 
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
-                if metric:
-                    cur.execute(
-                        """
-                        SELECT COUNT(*)
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                          AND m.metric = %s
-                        """,
-                        tuple(params + [metric]),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT COUNT(*)
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                        """,
-                        tuple(params),
-                    )
-                total = int(cur.fetchone()[0])
-
-                if metric:
-                    cur.execute(
-                        """
-                        SELECT m.ts, m.metric, m.value
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                          AND m.metric = %s
-                        ORDER BY m.ts DESC
-                        LIMIT %s
-                        OFFSET %s
-                        """,
-                        tuple(params + [metric, limit, offset]),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT m.ts, m.metric, m.value
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                        ORDER BY m.ts DESC
-                        LIMIT %s
-                        OFFSET %s
-                        """,
-                        tuple(params + [limit, offset]),
-                    )
+                cur.execute(
+                    f"""
+                    SELECT m.ts, m.metric, m.value, COUNT(*) OVER() as total_count
+                    FROM measurements m
+                    JOIN topics t ON t.id = m.topic_id
+                    WHERE t.name = %(topic)s
+                      AND m.ts >= %(start)s
+                      AND m.ts <= %(end)s
+                      {metric_filter}
+                    ORDER BY m.ts DESC
+                    LIMIT %(limit)s
+                    OFFSET %(offset)s
+                    """,
+                    params,
+                )
                 rows = cur.fetchall()
 
+        if not rows:
+            return [], 0
+
+        total = int(rows[0][3])
         records = [
             HistoryRecord(
                 observed_at=row[0],
@@ -286,116 +260,58 @@ class MetricRepository:
         end: datetime,
         metric: str | None,
     ) -> TopicStats:
-        params: list[object] = [topic, start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
+        """
+        Consolidated topic statistics in a single query.
+        Reduces database round-trips from 3 to 1 and removes redundant branching.
+        """
+        params: dict[str, Any] = {
+            "topic": topic,
+            "start": start.astimezone(timezone.utc),
+            "end": end.astimezone(timezone.utc),
+            "metric": metric,
+        }
+
+        metric_filter = "AND m.metric = %(metric)s" if metric else ""
 
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
-                if metric:
-                    cur.execute(
-                        """
-                        SELECT
-                            COUNT(*) AS count,
-                            MIN(m.value) AS minimum,
-                            MAX(m.value) AS maximum,
-                            AVG(m.value)::double precision AS average
+                cur.execute(
+                    f"""
+                    WITH filtered AS (
+                        SELECT m.value, m.ts
                         FROM measurements m
                         JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                          AND m.metric = %s
-                        """,
-                        tuple(params + [metric]),
+                        WHERE t.name = %(topic)s
+                          AND m.ts >= %(start)s
+                          AND m.ts <= %(end)s
+                          {metric_filter}
                     )
-                else:
-                    cur.execute(
-                        """
-                        SELECT
-                            COUNT(*) AS count,
-                            MIN(m.value) AS minimum,
-                            MAX(m.value) AS maximum,
-                            AVG(m.value)::double precision AS average
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                        """,
-                        tuple(params),
-                    )
-                aggregate_row = cur.fetchone()
+                    SELECT
+                        (SELECT COUNT(*) FROM filtered) AS count,
+                        (SELECT MIN(value) FROM filtered) AS minimum,
+                        (SELECT MAX(value) FROM filtered) AS maximum,
+                        (SELECT AVG(value)::double precision FROM filtered) AS average,
+                        (SELECT value FROM filtered ORDER BY ts DESC LIMIT 1) AS latest_value,
+                        (SELECT ts FROM filtered ORDER BY ts DESC LIMIT 1) AS latest_ts,
+                        (SELECT value FROM filtered ORDER BY ts ASC LIMIT 1) AS first_value,
+                        (SELECT ts FROM filtered ORDER BY ts ASC LIMIT 1) AS first_ts
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
 
-                if metric:
-                    cur.execute(
-                        """
-                        SELECT m.value, m.ts
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                          AND m.metric = %s
-                        ORDER BY m.ts DESC
-                        LIMIT 1
-                        """,
-                        tuple(params + [metric]),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT m.value, m.ts
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                        ORDER BY m.ts DESC
-                        LIMIT 1
-                        """,
-                        tuple(params),
-                    )
-                latest_row = cur.fetchone()
-
-                if metric:
-                    cur.execute(
-                        """
-                        SELECT m.value, m.ts
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                          AND m.metric = %s
-                        ORDER BY m.ts ASC
-                        LIMIT 1
-                        """,
-                        tuple(params + [metric]),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT m.value, m.ts
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                        ORDER BY m.ts ASC
-                        LIMIT 1
-                        """,
-                        tuple(params),
-                    )
-                first_row = cur.fetchone()
+        if not row:
+            return TopicStats(None, None, None, None, 0, None, None, None)
 
         return TopicStats(
-            latest=latest_row[0] if latest_row else None,
-            minimum=aggregate_row[1] if aggregate_row else None,
-            maximum=aggregate_row[2] if aggregate_row else None,
-            average=aggregate_row[3] if aggregate_row else None,
-            count=int(aggregate_row[0] if aggregate_row else 0),
-            first_value=first_row[0] if first_row else None,
-            first_observed_at=first_row[1] if first_row else None,
-            latest_observed_at=latest_row[1] if latest_row else None,
+            latest=row[4],
+            minimum=row[1],
+            maximum=row[2],
+            average=row[3],
+            count=int(row[0] or 0),
+            first_value=row[6],
+            first_observed_at=row[7],
+            latest_observed_at=row[5],
         )
 
     def get_global_stats(
@@ -405,63 +321,47 @@ class MetricRepository:
         end: datetime,
     ) -> TopicStats:
         """
-        Optimized method to fetch global KPIs across all topics/metrics in a single database connection.
-        Used for the dashboard to avoid N+1 queries.
+        Consolidated global KPIs across all topics/metrics in a single query.
+        Reduces database round-trips from 3 to 1.
         """
-        params = [start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
+        ts_start = start.astimezone(timezone.utc)
+        ts_end = end.astimezone(timezone.utc)
 
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
-                # 1. Aggregates
                 cur.execute(
                     """
+                    WITH filtered AS (
+                        SELECT value, ts
+                        FROM measurements
+                        WHERE ts >= %(start)s AND ts <= %(end)s
+                    )
                     SELECT
-                        COUNT(*) AS count,
-                        MIN(value) AS minimum,
-                        MAX(value) AS maximum,
-                        AVG(value)::double precision AS average
-                    FROM measurements
-                    WHERE ts >= %s AND ts <= %s
+                        (SELECT COUNT(*) FROM filtered) AS count,
+                        (SELECT MIN(value) FROM filtered) AS minimum,
+                        (SELECT MAX(value) FROM filtered) AS maximum,
+                        (SELECT AVG(value)::double precision FROM filtered) AS average,
+                        (SELECT value FROM filtered ORDER BY ts DESC LIMIT 1) AS latest_value,
+                        (SELECT ts FROM filtered ORDER BY ts DESC LIMIT 1) AS latest_ts,
+                        (SELECT value FROM filtered ORDER BY ts ASC LIMIT 1) AS first_value,
+                        (SELECT ts FROM filtered ORDER BY ts ASC LIMIT 1) AS first_ts
                     """,
-                    params,
+                    {"start": ts_start, "end": ts_end},
                 )
-                aggregate_row = cur.fetchone()
+                row = cur.fetchone()
 
-                # 2. Latest value (global)
-                cur.execute(
-                    """
-                    SELECT value, ts
-                    FROM measurements
-                    WHERE ts >= %s AND ts <= %s
-                    ORDER BY ts DESC
-                    LIMIT 1
-                    """,
-                    params,
-                )
-                latest_row = cur.fetchone()
-
-                # 3. First value (global)
-                cur.execute(
-                    """
-                    SELECT value, ts
-                    FROM measurements
-                    WHERE ts >= %s AND ts <= %s
-                    ORDER BY ts ASC
-                    LIMIT 1
-                    """,
-                    params,
-                )
-                first_row = cur.fetchone()
+        if not row:
+            return TopicStats(None, None, None, None, 0, None, None, None)
 
         return TopicStats(
-            latest=latest_row[0] if latest_row else None,
-            minimum=aggregate_row[1] if aggregate_row else None,
-            maximum=aggregate_row[2] if aggregate_row else None,
-            average=aggregate_row[3] if aggregate_row else None,
-            count=int(aggregate_row[0] if aggregate_row else 0),
-            first_value=first_row[0] if first_row else None,
-            first_observed_at=first_row[1] if first_row else None,
-            latest_observed_at=latest_row[1] if latest_row else None,
+            latest=row[4],
+            minimum=row[1],
+            maximum=row[2],
+            average=row[3],
+            count=int(row[0] or 0),
+            first_value=row[6],
+            first_observed_at=row[7],
+            latest_observed_at=row[5],
         )
 
     def get_mqtt_runtime_config(self) -> MqttRuntimeConfig | None:
