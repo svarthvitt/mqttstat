@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Anti-pattern: Redundant lookup in high-frequency ingestion]
 **Learning:** Every MQTT message insertion triggered a topic name to ID lookup via `INSERT ... ON CONFLICT` and `SELECT`. In a high-frequency system, this triples the database load.
 **Action:** Use in-memory caching for static or slow-changing metadata (like topic IDs) to optimize hot paths.
+
+## 2026-04-28 - [Optimization: Query Consolidation and Repository Reuse]
+**Learning:** Consolidating aggregate and first/last value lookups into a single SQL query using CTEs/subqueries reduced database round-trips by 66% on stats-heavy pages. Reusing the repository instance via `app.state` enabled an in-memory cache that significantly reduced redundant topic-to-ID lookups.
+**Action:** Use window functions like `COUNT(*) OVER()` for paginated list counts and always leverage shared application state for data repositories with internal caches.
