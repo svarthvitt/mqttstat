@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Anti-pattern: Redundant lookup in high-frequency ingestion]
 **Learning:** Every MQTT message insertion triggered a topic name to ID lookup via `INSERT ... ON CONFLICT` and `SELECT`. In a high-frequency system, this triples the database load.
 **Action:** Use in-memory caching for static or slow-changing metadata (like topic IDs) to optimize hot paths.
+
+## 2025-05-15 - [Optimization: Single-trip Stats Retrieval]
+**Learning:** Topic and global statistics were previously retrieved via three separate database queries (aggregates, latest, and first). Consolidating these into a single query using a CTE and subqueries reduces database round-trips from 3 to 1.
+**Action:** Use PostgreSQL CTEs to group related but distinct temporal lookups (like first/latest) with aggregate calculations in a single round-trip.
