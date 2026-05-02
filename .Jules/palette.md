@@ -9,3 +9,7 @@
 ## 2026-04-12 - [UX] Completeness in Debug and Audit Logs
 **Learning:** Transition events that disable a logging feature must themselves be logged before the feature is deactivated. If the state check happens before recording the 'Disabled' event, the audit trail becomes incomplete and confusing to users.
 **Action:** Always allow "Disable" transition events to bypass state-based logging filters.
+
+## 2026-05-02 - [UX] Transient Feedback for Secondary Actions
+**Learning:** For non-critical successful actions like "Copy to Clipboard", a `window.alert` is unnecessarily disruptive as it requires user interaction to dismiss and breaks the flow. A transient label (e.g., "✅ Copied!") on the trigger element provides sufficient confirmation without the overhead of a modal dialog.
+**Action:** Use inline transient labels for copy-to-clipboard actions and other high-frequency, low-risk interactions.
