@@ -278,125 +278,22 @@ class MetricRepository:
         ]
         return records, total
 
-    def stats(
-        self,
-        *,
-        topic: str,
-        start: datetime,
-        end: datetime,
-        metric: str | None,
-    ) -> TopicStats:
-        params: list[object] = [topic, start.astimezone(timezone.utc), end.astimezone(timezone.utc)]
-
+    def stats(self, *, topic: str, start: datetime, end: datetime, metric: str | None) -> TopicStats:
         with psycopg.connect(self._database_url) as conn:
             with conn.cursor() as cur:
-                if metric:
-                    cur.execute(
-                        """
-                        SELECT
-                            COUNT(*) AS count,
-                            MIN(m.value) AS minimum,
-                            MAX(m.value) AS maximum,
-                            AVG(m.value)::double precision AS average
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                          AND m.metric = %s
-                        """,
-                        tuple(params + [metric]),
+                cur.execute("""
+                    WITH f AS (
+                        SELECT value, ts, ROW_NUMBER() OVER (ORDER BY ts ASC) as r_asc, ROW_NUMBER() OVER (ORDER BY ts DESC) as r_desc
+                        FROM measurements m JOIN topics t ON t.id = m.topic_id
+                        WHERE t.name = %(t)s AND m.ts >= %(s)s AND m.ts <= %(e)s AND (%(m)s IS NULL OR m.metric = %(m)s)
                     )
-                else:
-                    cur.execute(
-                        """
-                        SELECT
-                            COUNT(*) AS count,
-                            MIN(m.value) AS minimum,
-                            MAX(m.value) AS maximum,
-                            AVG(m.value)::double precision AS average
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                        """,
-                        tuple(params),
-                    )
-                aggregate_row = cur.fetchone()
-
-                if metric:
-                    cur.execute(
-                        """
-                        SELECT m.value, m.ts
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                          AND m.metric = %s
-                        ORDER BY m.ts DESC
-                        LIMIT 1
-                        """,
-                        tuple(params + [metric]),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT m.value, m.ts
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                        ORDER BY m.ts DESC
-                        LIMIT 1
-                        """,
-                        tuple(params),
-                    )
-                latest_row = cur.fetchone()
-
-                if metric:
-                    cur.execute(
-                        """
-                        SELECT m.value, m.ts
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                          AND m.metric = %s
-                        ORDER BY m.ts ASC
-                        LIMIT 1
-                        """,
-                        tuple(params + [metric]),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT m.value, m.ts
-                        FROM measurements m
-                        JOIN topics t ON t.id = m.topic_id
-                        WHERE t.name = %s
-                          AND m.ts >= %s
-                          AND m.ts <= %s
-                        ORDER BY m.ts ASC
-                        LIMIT 1
-                        """,
-                        tuple(params),
-                    )
-                first_row = cur.fetchone()
-
-        return TopicStats(
-            latest=latest_row[0] if latest_row else None,
-            minimum=aggregate_row[1] if aggregate_row else None,
-            maximum=aggregate_row[2] if aggregate_row else None,
-            average=aggregate_row[3] if aggregate_row else None,
-            count=int(aggregate_row[0] if aggregate_row else 0),
-            first_value=first_row[0] if first_row else None,
-            first_observed_at=first_row[1] if first_row else None,
-            latest_observed_at=latest_row[1] if latest_row else None,
-        )
+                    SELECT COUNT(*), MIN(value), MAX(value), AVG(value)::double precision,
+                        MAX(value) FILTER (WHERE r_desc = 1), MAX(ts) FILTER (WHERE r_desc = 1),
+                        MAX(value) FILTER (WHERE r_asc = 1), MAX(ts) FILTER (WHERE r_asc = 1) FROM f""",
+                    {"t": topic, "s": start.astimezone(timezone.utc), "e": end.astimezone(timezone.utc), "m": metric})
+                r = cur.fetchone()
+        return TopicStats(count=int(r[0]), minimum=r[1], maximum=r[2], average=r[3],
+                          latest=r[4], latest_observed_at=r[5], first_value=r[6], first_observed_at=r[7])
 
     def get_global_stats(
         self,
