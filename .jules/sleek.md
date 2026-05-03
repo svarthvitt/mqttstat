@@ -7,3 +7,7 @@
 ## 2026-05-22 - Time Window Resolution Simplification
 **Clutter:** The `_resolve_time_window` function in `main.py` used a repetitive `if/elif` chain to calculate start times for different `TimeRange` values.
 **Refactoring Win:** Consolidating the `TimeRange` to `timedelta` mappings into a constant dictionary `_TIME_RANGE_DELTAS` and simplifying the override logic makes the function more readable and easier to maintain.
+
+## 2026-05-23 - Metric Repository Efficiency and Boilerplate Reduction
+**Clutter:** The `history` and `stats` methods in `MetricRepository` contained significant code duplication due to `if/else` branching for an optional `metric` filter, and `stats` performed three separate database round-trips to fetch aggregates and boundary values.
+**Refactoring Win:** Consolidating filters into a single SQL pattern using named parameters and the `(%(param)s IS NULL OR column = %(param)s)` trick eliminated duplication. Using a CTE in `stats` reduced database round-trips from 3 to 1, improving both performance and readability.
