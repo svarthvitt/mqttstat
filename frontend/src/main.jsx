@@ -109,10 +109,10 @@ function toInputValue(date) {
   return `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())}T${pad(local.getHours())}:${pad(local.getMinutes())}`
 }
 
-function buildRange(hours) {
+function buildRange(hours, label = null) {
   const to = new Date()
   const from = new Date(to.getTime() - hours * 60 * 60 * 1000)
-  return { from: toInputValue(from), to: toInputValue(to) }
+  return { from: toInputValue(from), to: toInputValue(to), preset: label }
 }
 
 function buildDashboardQueryParams(range) {
@@ -395,7 +395,7 @@ function LineChart({ series }) {
 }
 
 function Dashboard() {
-  const [range, setRange] = useState(() => buildRange(24))
+  const [range, setRange] = useState(() => buildRange(24, '24h'))
   const [dashboard, setDashboard] = useState({ data: null, loading: true, error: null })
   const [topics, setTopics] = useState({ data: [], loading: true, error: null })
   const [selectedSeries, setSelectedSeries] = useState([])
@@ -477,16 +477,24 @@ function Dashboard() {
         <div className="filter-row">
           <label>
             From
-            <input type="datetime-local" value={range.from} onChange={(event) => setRange((prev) => ({ ...prev, from: event.target.value }))} />
+            <input type="datetime-local" value={range.from} onChange={(event) => setRange((prev) => ({ ...prev, from: event.target.value, preset: null }))} />
           </label>
           <label>
             To
-            <input type="datetime-local" value={range.to} onChange={(event) => setRange((prev) => ({ ...prev, to: event.target.value }))} />
+            <input type="datetime-local" value={range.to} onChange={(event) => setRange((prev) => ({ ...prev, to: event.target.value, preset: null }))} />
           </label>
         </div>
         <div className="preset-row">
           {PRESET_RANGES.map((preset) => (
-            <button key={preset.label} type="button" onClick={() => setRange(buildRange(preset.hours))}>{preset.label}</button>
+            <button
+              key={preset.label}
+              type="button"
+              className={range.preset === preset.label ? 'active' : ''}
+              aria-pressed={range.preset === preset.label}
+              onClick={() => setRange(buildRange(preset.hours, preset.label))}
+            >
+              {preset.label}
+            </button>
           ))}
         </div>
       </section>
@@ -558,7 +566,7 @@ function Dashboard() {
 }
 
 function TopicDetailPage({ topic, metric }) {
-  const [range, setRange] = useState(() => buildRange(24 * 7))
+  const [range, setRange] = useState(() => buildRange(24 * 7, '7d'))
   const [state, setState] = useState({ data: null, loading: true, error: null })
 
   useEffect(() => {
@@ -595,7 +603,15 @@ function TopicDetailPage({ topic, metric }) {
         <p><strong>Metric:</strong> {metric || 'all metrics'}</p>
         <div className="preset-row">
           {PRESET_RANGES.map((preset) => (
-            <button key={preset.label} type="button" onClick={() => setRange(buildRange(preset.hours))}>{preset.label}</button>
+            <button
+              key={preset.label}
+              type="button"
+              className={range.preset === preset.label ? 'active' : ''}
+              aria-pressed={range.preset === preset.label}
+              onClick={() => setRange(buildRange(preset.hours, preset.label))}
+            >
+              {preset.label}
+            </button>
           ))}
         </div>
       </section>
