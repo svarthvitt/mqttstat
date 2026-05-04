@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Anti-pattern: Redundant lookup in high-frequency ingestion]
 **Learning:** Every MQTT message insertion triggered a topic name to ID lookup via `INSERT ... ON CONFLICT` and `SELECT`. In a high-frequency system, this triples the database load.
 **Action:** Use in-memory caching for static or slow-changing metadata (like topic IDs) to optimize hot paths.
+
+## 2025-05-16 - [Optimization: Avoid redundant JOINs with static metadata]
+**Learning:** Frequently queried tables (like `measurements`) often join with metadata tables (like `topics`) just to filter by a human-readable name. In a high-volume system, resolving the ID once and caching it in the application layer eliminates unnecessary JOIN overhead in subsequent read queries.
+**Action:** Use an in-memory cache for ID resolution and pass IDs directly to data-heavy queries.
