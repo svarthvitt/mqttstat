@@ -112,6 +112,12 @@ button:active {
   background: #bfdbfe;
 }
 
+.preset-row button.active {
+  background: #2563eb;
+  color: white;
+  border-color: #1d4ed8;
+}
+
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
