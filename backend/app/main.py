@@ -468,9 +468,8 @@ def get_dashboard(
     resolved_end = _to_utc(effective_end) if effective_end else now
     resolved_start = _to_utc(effective_start) if effective_start else resolved_end - timedelta(hours=24)
 
-    # Simplified dashboard data - in a real app this would be more complex
-    topics = repository.list_topics()
-    total_measurements = sum(t.metric_count for t in topics)
+    # Optimized dashboard data using get_dashboard_summary to avoid heavy list_topics
+    total_topics, total_measurements, latest_topic_name, latest_observed_at = repository.get_dashboard_summary()
 
     # Calculate global KPIs across all topics/metrics for the range
     # Using optimized global_stats to avoid N+1 queries
@@ -486,16 +485,15 @@ def get_dashboard(
     )
 
     cards = [
-        DashboardCard(key="topics", label="Active Topics", value=str(len(topics))),
+        DashboardCard(key="topics", label="Active Topics", value=str(total_topics)),
         DashboardCard(key="measurements", label="Total Measurements", value=str(total_measurements)),
     ]
-    if topics:
-        latest_topic = max(topics, key=lambda t: t.latest_observed_at or datetime.min.replace(tzinfo=timezone.utc))
+    if latest_topic_name:
         cards.append(DashboardCard(
             key="latest_topic",
             label="Most Recent Topic",
-            value=latest_topic.name,
-            hint=f"Updated {latest_topic.latest_observed_at.strftime('%H:%M:%S')}" if latest_topic.latest_observed_at else None
+            value=latest_topic_name,
+            hint=f"Updated {latest_observed_at.strftime('%H:%M:%S')}" if latest_observed_at else None
         ))
 
     return DashboardResponse(cards=cards, kpis=kpis)
@@ -666,7 +664,7 @@ def topic_history(
     limit: int = Query(default=100, ge=1, le=1000, description="Maximum number of records to return."),
     offset: int = Query(default=0, ge=0, description="Pagination offset."),
 ) -> HistoryResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 
@@ -713,7 +711,7 @@ def topic_stats(
     end: datetime | None = Query(default=None, description="Optional end timestamp (ISO-8601)."),
     metric: str | None = Query(default=None, description="Optional metric key filter."),
 ) -> StatsResponse:
-    repository = MetricRepository(get_settings().database_url)
+    repository: MetricRepository = app.state.repository
     if not repository.topic_exists(topic):
         raise HTTPException(status_code=404, detail=f"Topic '{topic}' was not found.")
 

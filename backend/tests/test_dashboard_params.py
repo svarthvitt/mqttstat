@@ -18,6 +18,9 @@ class FakeDashboardRepository:
     def list_topics(self):
         return []
 
+    def get_dashboard_summary(self):
+        return 0, 0, None, None
+
     def get_global_stats(self, *, start: datetime, end: datetime):
         self.calls.append((start, end))
         return TopicStats(
